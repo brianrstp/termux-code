@@ -5,6 +5,7 @@ Selenium-based, optimized for Termux/Android.
 import random
 import time
 from faker import Faker
+from selenium.webdriver.common.by import By
 
 from browser import StealthBrowser
 from sms_verify import SmsVerifier
@@ -383,58 +384,200 @@ class GmailCreator:
         print("   ══ END DUMP ══\n")
 
     def _choose_email(self):
-        self.browser.wait_for('[data-email], input[type="email"], input[name="Username"]', timeout=10)
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
 
-        # Try suggestion
+        # Debug: dump current page state before looking for elements
+        print("   🔎 Checking current page state...")
+        url = self.browser.page_url
+        print(f"   📍 URL: {url}")
+        body_text = (self.browser.get_page_text() or "")[:500]
+        print(f"   📄 Page text preview: {body_text[:200]}")
+
+        # Check if we're on a verification page instead of email step
+        if "verify" in url.lower() or "challenge" in url.lower() or "phone" in body_text.lower():
+            print("   ⚠️  Phone verification page detected — skipping email step")
+            return
+
+        # Try to find email-related elements with multiple strategies
+        email_input = None
+
+        # Strategy 1: standard selectors
+        for sel in [
+            'input[name="Username"]',
+            'input[type="email"]',
+            '[data-email]',
+            'input[aria-label*="username" i]',
+            'input[aria-label*="email" i]',
+            'input[aria-label*="Gmail" i]',
+            'input[placeholder*="username" i]',
+            'input[placeholder*="email" i]',
+            'input[id*="user" i]',
+            'input[id*="email" i]',
+        ]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el.is_displayed():
+                    email_input = el
+                    print(f"   📧 Email input found via: {sel}")
+                    break
+            except Exception:
+                continue
+
+        # Strategy 2: find by visible text prompts
+        if not email_input:
+            try:
+                # Look for text "Choose your Gmail address" or "Create a Gmail address"
+                label = driver.find_element(By.XPATH,
+                    "//*[contains(text(),'Gmail address') or "
+                    "contains(text(),'username') or "
+                    "contains(text(),'email address')]")
+                print(f"   📧 Found label: {label.text[:50]}")
+            except Exception:
+                pass
+
+        # Strategy 3: dump all inputs for debugging
+        if not email_input:
+            print("   ⚠️  Email input not found — dumping all visible inputs:")
+            all_inputs = driver.find_elements(By.TAG_NAME, "input")
+            for inp in all_inputs:
+                if inp.is_displayed():
+                    print(f"      <input type={inp.get_attribute('type')} "
+                          f"name={inp.get_attribute('name')} "
+                          f"id={inp.get_attribute('id')} "
+                          f"aria={inp.get_attribute('aria-label')} "
+                          f"placeholder={inp.get_attribute('placeholder')}>")
+            # Also dump all buttons and links
+            for tag in ["button", "a"]:
+                els = driver.find_elements(By.TAG_NAME, tag)
+                for el in els:
+                    if el.is_displayed() and el.text:
+                        print(f"      <{tag}> text={el.text[:50]}")
+
+            raise RuntimeError("❌ Cannot find email/username input on page")
+
+        # ── Try suggestion first (radio buttons or data-email) ──
         try:
-            suggestion = self.browser.safe_find('[data-email]')
+            suggestion = driver.find_element(By.CSS_SELECTOR, '[data-email]')
             if suggestion and suggestion.is_displayed():
                 self.email = suggestion.get_attribute("data-email")
                 self.username = self.email.split("@")[0]
-                self.human_click(suggestion)
+                suggestion.click()
                 self.browser.random_delay(0.5, 1.0)
                 self._click_next()
                 return
         except Exception:
             pass
 
-        # Custom username
-        self.username = self._generate_username()
-        self.email = f"{self.username}@gmail.com"
-
-        username_input = self.browser.safe_find('input[name="Username"]') or self.browser.safe_find('input[type="email"]')
-        if username_input:
-            username_input.click()
-            time.sleep(random.uniform(0.2, 0.5))
-            username_input.clear()
-            username_input.send_keys(self.username)
-            self.browser.random_delay(0.5, 1.0)
-            self._click_next()
-
-            # Check taken
-            time.sleep(2)
-            error = self.browser.safe_find('[aria-live="assertive"]')
-            if error and ("taken" in (error.text or "").lower() or "already" in (error.text or "").lower()):
-                self.username = f"{self.username}{random.randint(100, 999)}"
-                self.email = f"{self.username}@gmail.com"
-                username_input.clear()
-                username_input.send_keys(self.username)
+        # ── Try radio button suggestions (Google sometimes offers suggestions) ──
+        try:
+            radios = driver.find_elements(By.CSS_SELECTOR, 'input[type="radio"]')
+            if radios:
+                # Pick first suggestion
+                radios[0].click()
                 self.browser.random_delay(0.5, 1.0)
                 self._click_next()
+                return
+        except Exception:
+            pass
+
+        # ── Custom username ──
+        self.username = self._generate_username()
+        self.email = f"{self.username}@gmail.com"
+        print(f"   📧 Trying username: {self.username}")
+
+        email_input.click()
+        time.sleep(random.uniform(0.2, 0.5))
+        email_input.clear()
+        email_input.send_keys(self.username)
+        self.browser.random_delay(0.5, 1.0)
+        self._click_next()
+
+        # Check if username is taken
+        time.sleep(2)
+        error = None
+        for sel in ['[aria-live="assertive"]', '[role="alert"]',
+                    '.error', '.ErrorMessage', 'div[class*="error" i]']:
+            try:
+                error = driver.find_element(By.CSS_SELECTOR, sel)
+                if error.is_displayed() and error.text:
+                    break
+                error = None
+            except Exception:
+                continue
+
+        if error and ("taken" in (error.text or "").lower()
+                      or "already" in (error.text or "").lower()
+                      or "available" not in (error.text or "").lower()):
+            print(f"   ⚠️  Username taken: {error.text[:50]}")
+            self.username = f"{self.username}{random.randint(100, 999)}"
+            self.email = f"{self.username}@gmail.com"
+            print(f"   📧 Retrying with: {self.username}")
+            email_input.clear()
+            email_input.send_keys(self.username)
+            self.browser.random_delay(0.5, 1.0)
+            self._click_next()
+        elif error:
+            print(f"   ℹ️  Info: {error.text[:80]}")
 
     def _create_password(self):
         self.password = self._generate_password()
+        driver = self.browser.driver
 
-        self.browser.wait_for('input[name="Passwd"], input[type="password"]', timeout=10)
+        # Debug: dump page state
+        print(f"   🔎 Looking for password fields...")
+        url = self.browser.page_url
+        print(f"   📍 URL: {url}")
 
-        pwd = self.browser.find('input[name="Passwd"]')
+        # Find password input with multiple strategies
+        pwd = None
+        for sel in ['input[name="Passwd"]', 'input[type="password"]',
+                    'input[aria-label*="password" i]',
+                    'input[aria-label*="Password" i]',
+                    'input[placeholder*="password" i]',
+                    'input[id*="pass" i]']:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el.is_displayed():
+                    pwd = el
+                    print(f"   🔐 Password input found via: {sel}")
+                    break
+            except Exception:
+                continue
+
+        if not pwd:
+            # Dump all inputs for debugging
+            print("   ⚠️  Password input not found — dumping all visible inputs:")
+            for inp in driver.find_elements(By.TAG_NAME, "input"):
+                if inp.is_displayed():
+                    print(f"      <input type={inp.get_attribute('type')} "
+                          f"name={inp.get_attribute('name')} "
+                          f"aria={inp.get_attribute('aria-label')}>")
+            raise RuntimeError("❌ Cannot find password input on page")
+
         pwd.click()
         time.sleep(random.uniform(0.2, 0.5))
         pwd.send_keys(self.password)
+        print(f"   🔐 Password entered")
         self.browser.random_delay(0.3, 0.8)
 
-        confirm = self.browser.safe_find('input[name="PasswdAgain"]')
-        if confirm and confirm.is_displayed():
+        # Find confirm password input
+        confirm = None
+        for sel in ['input[name="PasswdAgain"]', 'input[name="ConfirmPasswd"]',
+                    'input[aria-label*="confirm" i]',
+                    'input[aria-label*="re-enter" i]',
+                    'input[aria-label*="again" i]',
+                    'input[type="password"]']:  # second password field
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el.is_displayed() and el != pwd:
+                    confirm = el
+                    print(f"   🔐 Confirm password found via: {sel}")
+                    break
+            except Exception:
+                continue
+
+        if confirm:
             confirm.click()
             time.sleep(random.uniform(0.2, 0.5))
             confirm.send_keys(self.password)
@@ -562,13 +705,38 @@ class GmailCreator:
     # ========================
 
     def _click_next(self):
-        for text in ["Next"]:
-            btn = self.browser.safe_find_text(text)
-            if btn and btn.is_displayed():
-                btn.click()
-                self.browser.random_delay(1, 2)
-                return
-        self.browser.driver.find_element(By.TAG_NAME, "body").send_keys("\n")
+        driver = self.browser.driver
+        # Strategy 1: find button/link with "Next" text
+        for text in ["Next", "Continue"]:
+            try:
+                btn = driver.find_element(By.XPATH,
+                    f"//button[contains(text(),'{text}')] | "
+                    f"//div[@role='button'][contains(text(),'{text}')] | "
+                    f"//span[contains(text(),'{text}')]//ancestor::*[@role='button' or self::button] | "
+                    f"//a[contains(text(),'{text}')] | "
+                    f"//input[@type='submit'][contains(@value,'{text}')]"
+                )
+                if btn.is_displayed():
+                    btn.click()
+                    print(f"   ▶️ Clicked: {text}")
+                    self.browser.random_delay(1, 2)
+                    return
+            except Exception:
+                continue
+        # Strategy 2: find by CSS
+        for sel in ['button[type="submit"]', 'div[role="button"]', 'button']:
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, sel)
+                if btn.is_displayed() and btn.text:
+                    btn.click()
+                    print(f"   ▶️ Clicked button: {btn.text[:30]}")
+                    self.browser.random_delay(1, 2)
+                    return
+            except Exception:
+                continue
+        # Strategy 3: press Enter as last resort
+        print("   ▶️ No button found, pressing Enter")
+        driver.find_element(By.TAG_NAME, "body").send_keys("\n")
         self.browser.random_delay(1, 2)
 
     def _generate_username(self) -> str:
