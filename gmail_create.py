@@ -772,32 +772,71 @@ class GmailCreator:
         self._click_next()
 
     def _handle_verification(self) -> bool:
-        """Handle verification page — try to skip phone verification."""
+        """Handle verification page — detect QR code, try to skip or switch to SMS."""
         from selenium.webdriver.common.by import By
         driver = self.browser.driver
 
         time.sleep(3)
         url = self.browser.page_url
+        body_text = self.browser.get_page_text().lower()
         print(f"   📍 Verification URL: {url[:80]}...")
 
         # Check if we're actually on a welcome/account page (no verification needed)
-        body = self.browser.get_page_text().lower()
         if any(kw in url.lower() for kw in ["myaccount", "mail.google", "welcome"]):
             print("   ✅ No verification needed — already on account page")
             return True
-        if any(kw in body for kw in ["welcome", "congratulations", "you're all set"]):
+        if any(kw in body_text for kw in ["welcome", "congratulations", "you're all set"]):
             print("   ✅ No verification needed — welcome page detected")
             return True
 
+        # ── Detect QR code page ──
+        is_qr_page = False
+        try:
+            # Check for QR code image
+            qr_elements = driver.find_elements(By.CSS_SELECTOR,
+                'img[src*="qr"], img[alt*="QR"], img[alt*="qr"], '
+                'img[aria-label*="QR"], canvas, '
+                '[class*="qr" i], [id*="qr" i], '
+                '[class*="barcode" i], [id*="barcode" i]')
+            for el in qr_elements:
+                if el.is_displayed():
+                    is_qr_page = True
+                    print("   📷 QR code detected on page!")
+                    break
+        except Exception:
+            pass
+
+        # Also check page text for QR-related keywords
+        if not is_qr_page:
+            qr_keywords = ["qr code", "scan", "scan with", "google app",
+                          "open google", "verify on your phone"]
+            if any(kw in body_text for kw in qr_keywords):
+                is_qr_page = True
+                print("   📷 QR code page detected (via text keywords)!")
+
+        if is_qr_page:
+            return self._handle_qr_verification()
+
         # ── Strategy 1: Try to SKIP verification entirely ──
-        print("   🔄 Attempting to skip phone verification...")
+        print("   🔄 Attempting to skip verification...")
         for attempt in range(MAX_VERIFICATION_RETRIES):
             print(f"   📱 Attempt {attempt + 1}/{MAX_VERIFICATION_RETRIES}")
+
+            # Dump all visible buttons for debugging
+            print("   🔎 Visible buttons:")
+            for tag in ["button", "div[role='button']", "a", "span"]:
+                try:
+                    els = driver.find_elements(By.CSS_SELECTOR, tag)
+                    for el in els:
+                        if el.is_displayed() and el.text.strip():
+                            print(f"      <{tag}> text={el.text.strip()[:50]}")
+                except Exception:
+                    continue
 
             # Try "Skip" button first
             for skip_text in ["Skip", "Skip this step", "Not now", "Use without",
                               "No thanks", "I'll do this later", "Confirm",
-                              "Skip phone number"]:
+                              "Skip phone number", "Skip verification"]:
                 try:
                     btn = driver.find_element(By.XPATH,
                         f"//button[contains(text(),'{skip_text}')] | "
@@ -821,13 +860,16 @@ class GmailCreator:
                 except Exception:
                     continue
 
-            # Try "Try another way" to get alternative options
-            for alt_text in ["Try another way", "Other options", "More options"]:
+            # Try "Try another way" to get alternative options (switch from QR to SMS)
+            for alt_text in ["Try another way", "Other options", "More options",
+                            "Use SMS", "Text me", "Get a text", "Send text"]:
                 try:
                     btn = driver.find_element(By.XPATH,
                         f"//button[contains(text(),'{alt_text}')] | "
                         f"//div[@role='button'][contains(text(),'{alt_text}')] | "
-                        f"//a[contains(text(),'{alt_text}')]"
+                        f"//a[contains(text(),'{alt_text}')] | "
+                        f"//span[contains(text(),'{alt_text}')]"
+                        f"/ancestor::*[@role='button' or self::button]"
                     )
                     if btn.is_displayed():
                         print(f"   🔄 Clicking: '{alt_text}'")
@@ -851,7 +893,7 @@ class GmailCreator:
                         print(f"   📧 Found: '{recovery_text}' — using this instead")
                         btn.click()
                         self.browser.random_delay(1, 2)
-                        # Fill recovery email (we can use a fake one)
+                        # Fill recovery email
                         try:
                             rec_input = driver.find_element(By.CSS_SELECTOR,
                                 'input[type="email"]')
@@ -880,6 +922,84 @@ class GmailCreator:
 
         # ── Strategy 2: If all skip attempts failed, use SMS service ──
         print("   📱 Skip failed — attempting SMS verification...")
+        return self._process_verification()
+
+    def _handle_qr_verification(self) -> bool:
+        """Handle QR code verification — try to switch to SMS or skip."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+
+        print("   📷 QR Code Verification Page Detected")
+        print("   ℹ️  QR code requires scanning with Google app on a phone")
+        print("   🔄 Attempting to switch to SMS verification...")
+
+        # ── Step 1: Find and click "Try another way" or similar ──
+        for attempt in range(3):
+            # Look for buttons that switch away from QR
+            for btn_text in [
+                "Try another way", "Try a different way",
+                "Other options", "Use SMS", "Text me",
+                "Send text message", "Get a text",
+                "Use your phone", "Use phone number",
+                "Enter phone number", "Skip", "Skip this step",
+                "Not now", "I don't have my phone",
+            ]:
+                try:
+                    btn = driver.find_element(By.XPATH,
+                        f"//button[contains(text(),'{btn_text}')] | "
+                        f"//div[@role='button'][contains(text(),'{btn_text}')] | "
+                        f"//a[contains(text(),'{btn_text}')] | "
+                        f"//span[contains(text(),'{btn_text}')]"
+                        f"/ancestor::*[@role='button' or self::button]"
+                    )
+                    if btn.is_displayed():
+                        print(f"   🔄 Found: '{btn_text}' — clicking...")
+                        btn.click()
+                        self.browser.random_delay(2, 3)
+
+                        # Check what page we're on now
+                        new_url = self.browser.page_url
+                        new_body = self.browser.get_page_text().lower()
+                        print(f"   📍 After click URL: {new_url[:80]}...")
+
+                        # Check if we moved to SMS verification
+                        if "phone" in new_body or "sms" in new_body or "text" in new_body:
+                            print("   📱 Switched to SMS verification!")
+                            return self._process_verification()
+
+                        # Check if we skipped verification entirely
+                        if any(kw in new_url.lower() for kw in ["myaccount", "welcome", "mail"]):
+                            print("   ✅ Verification skipped!")
+                            return True
+                        if any(kw in new_body for kw in ["welcome", "congratulations"]):
+                            print("   ✅ Verification skipped!")
+                            return True
+
+                        break
+                except Exception:
+                    continue
+
+            time.sleep(2)
+
+        # ── Step 2: Try to find phone input directly ──
+        # Sometimes "Try another way" leads to phone input
+        phone_input = None
+        for sel in ['input[type="tel"]', 'input[name="phoneNumber"]',
+                    'input[aria-label*="phone" i]']:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el.is_displayed():
+                    phone_input = el
+                    print("   📱 Phone input found after QR bypass!")
+                    break
+            except Exception:
+                continue
+
+        if phone_input:
+            return self._process_verification()
+
+        # ── Step 3: Try SMS via service ──
+        print("   📱 Attempting SMS verification via service...")
         return self._process_verification()
 
     def _process_verification(self) -> bool:
