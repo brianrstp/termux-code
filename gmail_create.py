@@ -138,23 +138,101 @@ class GmailCreator:
         self._click_next()
 
     def _fill_birthday_gender(self):
-        self.browser.wait_for('select[name="month"]', timeout=10)
-
-        month = random.randint(1, 12)
         from selenium.webdriver.support.ui import Select
-        Select(self.browser.find('select[name="month"]')).select_by_value(str(month).zfill(2))
+        from selenium.webdriver.common.by import By
+
+        # Google's signup form changes frequently — try multiple selector strategies
+        # Debug: dump available selects and inputs on page
+        driver = self.browser.driver
+        selects = driver.find_elements(By.TAG_NAME, "select")
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"   🔎 Found {len(selects)} <select> and {len(inputs)} <input> elements")
+        for s in selects:
+            print(f"      <select> name={s.get_attribute('name')} id={s.get_attribute('id')} "
+                  f"aria-label={s.get_attribute('aria-label')}")
+        for inp in inputs:
+            t = inp.get_attribute("type") or "text"
+            if t not in ("hidden",):
+                print(f"      <input type={t}> name={inp.get_attribute('name')} "
+                      f"id={inp.get_attribute('id')} aria-label={inp.get_attribute('aria-label')}")
+
+        # ── Month ──
+        month = random.randint(1, 12)
+        month_val = str(month).zfill(2)
+        month_select = None
+        for sel in selects:
+            name = (sel.get_attribute("name") or "").lower()
+            aid = (sel.get_attribute("id") or "").lower()
+            aria = (sel.get_attribute("aria-label") or "").lower()
+            if any(k in name or k in aid or k in aria for k in ["month"]):
+                month_select = sel
+                break
+        if month_select:
+            print(f"   📅 Month select found: name={month_select.get_attribute('name')}")
+            Select(month_select).select_by_value(month_val)
+        else:
+            # Fallback: try by index (month is often the first select)
+            if selects:
+                print(f"   📅 Using first <select> for month (index fallback)")
+                Select(selects[0]).select_by_value(month_val)
+            else:
+                raise RuntimeError("❌ Cannot find month dropdown on page")
         time.sleep(random.uniform(0.3, 0.6))
 
-        day = self.browser.find('input[name="day"]')
-        day.send_keys(str(random.randint(1, 28)))
+        # ── Day ──
+        day_val = str(random.randint(1, 28))
+        day_input = None
+        for inp in inputs:
+            name = (inp.get_attribute("name") or "").lower()
+            aid = (inp.get_attribute("id") or "").lower()
+            aria = (inp.get_attribute("aria-label") or "").lower()
+            if any(k in name or k in aid or k in aria for k in ["day"]):
+                day_input = inp
+                break
+        if day_input:
+            print(f"   📅 Day input found: name={day_input.get_attribute('name')}")
+            day_input.click()
+            day_input.send_keys(day_val)
+        else:
+            raise RuntimeError("❌ Cannot find day input on page")
         time.sleep(random.uniform(0.3, 0.6))
 
-        year = self.browser.find('input[name="year"]')
-        year.send_keys(str(random.randint(1990, 2006)))
+        # ── Year ──
+        year_val = str(random.randint(1990, 2006))
+        year_input = None
+        for inp in inputs:
+            name = (inp.get_attribute("name") or "").lower()
+            aid = (inp.get_attribute("id") or "").lower()
+            aria = (inp.get_attribute("aria-label") or "").lower()
+            if any(k in name or k in aid or k in aria for k in ["year"]):
+                year_input = inp
+                break
+        if year_input:
+            print(f"   📅 Year input found: name={year_input.get_attribute('name')}")
+            year_input.click()
+            year_input.send_keys(year_val)
+        else:
+            raise RuntimeError("❌ Cannot find year input on page")
         time.sleep(random.uniform(0.3, 0.6))
 
+        # ── Gender ──
         gender = random.choice(["1", "2", "3"])
-        Select(self.browser.find('select[name="gender"]')).select_by_value(gender)
+        gender_select = None
+        for sel in selects:
+            name = (sel.get_attribute("name") or "").lower()
+            aid = (sel.get_attribute("id") or "").lower()
+            aria = (sel.get_attribute("aria-label") or "").lower()
+            if any(k in name or k in aid or k in aria for k in ["gender"]):
+                gender_select = sel
+                break
+        if gender_select:
+            print(f"   📅 Gender select found: name={gender_select.get_attribute('name')}")
+            Select(gender_select).select_by_value(gender)
+        elif len(selects) >= 2:
+            print(f"   📅 Using second <select> for gender (index fallback)")
+            Select(selects[1]).select_by_value(gender)
+        else:
+            print("   ⚠️  Gender select not found, skipping")
 
         self.browser.random_delay(0.5, 1.5)
         self._click_next()
