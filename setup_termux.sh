@@ -12,94 +12,79 @@ echo "╚═══════════════════════�
 
 # Step 1: Update Termux
 echo ""
-echo "📦 [1/7] Updating Termux packages..."
+echo "📦 [1/6] Updating Termux packages..."
 pkg update -y && pkg upgrade -y
 
-# Step 2: Install build deps (REQUIRED for playwright on ARM)
+# Step 2: Install Python 3.11 (playwright does NOT support Python 3.13)
 echo ""
-echo "📦 [2/7] Installing build dependencies..."
-pkg install -y python python-pip git wget curl
-# Note: Termux uses different package names than Debian/Ubuntu
-# No -dev suffix needed, headers come with the main package
+echo "📦 [2/6] Installing Python 3.11 (required for playwright)..."
+pkg install -y python3.11 python3.11-pip git wget curl
+
+# Create symlinks so 'python3' points to 3.11
+PYTHON_VER=$(python3.11 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo "✅ Installed Python $PYTHON_VER"
+
+# Step 3: Install build deps for playwright
+echo ""
+echo "📦 [3/6] Installing build dependencies..."
 pkg install -y libffi openssl clang binutils make cmake
 
-# Step 3: Install Chromium
+# Step 4: Install Chromium
 echo ""
-echo "🌐 [3/7] Installing Chromium browser..."
-# Chromium is NOT in default Termux repo — need x11-repo first
+echo "🌐 [4/6] Installing Chromium browser..."
 pkg install -y x11-repo 2>/dev/null || true
 pkg install -y chromium 2>/dev/null || {
-    echo "⚠️  chromium not in x11-repo, trying tur-repo..."
-    pkg install -y tur-repo 2>/dev/null || true
-    pkg install -y chromium 2>/dev/null || {
-        echo "⚠️  Chromium package not available."
-        echo "    Will use playwright's bundled chromium instead."
-        echo "    (This requires playwright to be built from source)"
+    echo "⚠️  chromium not available, using playwright's bundled chromium"
+}
+
+# Step 5: Install Python packages with Python 3.11
+echo ""
+echo "📦 [5/6] Installing Python packages..."
+python3.11 -m pip install --upgrade pip setuptools wheel cffi
+
+# Install playwright from PyPI (Python 3.11 has proper support)
+echo "🔧 Installing playwright (with Python 3.11)..."
+python3.11 -m pip install playwright 2>/dev/null || {
+    echo "⚠️  PyPI failed, building from source..."
+    python3.11 -m pip install git+https://github.com/microsoft/playwright-python.git 2>/dev/null || {
+        echo "❌ Playwright install failed."
     }
 }
 
-# Step 4: Install Python packages
-echo ""
-echo "📦 [4/7] Installing Python packages..."
-pip install --upgrade pip setuptools wheel cffi
+python3.11 -m pip install faker rich requests
 
-# Playwright is NOT on PyPI for ARM/Termux — must install from GitHub
-echo "🔧 Installing playwright from GitHub source (may take 5-10 min)..."
-pip install git+https://github.com/microsoft/playwright-python.git 2>/dev/null || {
-    echo "⚠️  GitHub install failed. Trying with --no-build-isolation..."
-    pip install --no-build-isolation git+https://github.com/microsoft/playwright-python.git 2>/dev/null || {
-        echo "❌ Playwright install failed. The project will run in HTTP-only mode."
-        echo "    Browser-based features will not work."
-    }
+# Install playwright browsers
+echo "🌐 Installing playwright chromium..."
+python3.11 -m playwright install chromium 2>/dev/null || {
+    echo "⚠️  Using system chromium"
+    CHROMIUM_PATH=$(which chromium 2>/dev/null || echo "")
+    if [ -n "$CHROMIUM_PATH" ]; then
+        echo "export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_PATH" >> ~/.bashrc
+    fi
 }
 
-pip install faker rich requests
-
-# Step 5: Configure Chromium path for Playwright
+# Step 6: Create wrapper script
 echo ""
-echo "🌐 [5/7] Configuring Chromium..."
-CHROMIUM_PATH=$(which chromium 2>/dev/null || echo "")
-if [ -n "$CHROMIUM_PATH" ]; then
-    echo "✅ System chromium: $CHROMIUM_PATH"
-    echo "export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_PATH" >> ~/.bashrc
-    export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$CHROMIUM_PATH"
-else
-    echo "⚠️  Chromium not found at system path, trying playwright install..."
-    python -m playwright install chromium 2>/dev/null || true
-fi
-
-# Step 6: Create data directory
-echo ""
-echo "📁 [6/7] Creating data directory..."
-mkdir -p ~/.gmail_creator
-mkdir -p ~/.gmail_creator/profiles
-
-# Step 7: Verify installation
-echo ""
-echo "✅ [7/7] Verifying installation..."
-python -c "from playwright.async_api import async_playwright; print('✅ Playwright OK')" 2>/dev/null || echo "⚠️  Playwright not available (browser mode disabled)"
-python -c "from faker import Faker; print('✅ Faker OK')"
-python -c "from rich.console import Console; print('✅ Rich OK')"
-python -c "import requests; print('✅ Requests OK')"
+echo "📁 [6/6] Creating launcher script..."
+cat > ~/gmail-creator << 'LAUNCHER'
+#!/bin/bash
+cd "$(dirname "$0")"
+python3.11 main.py "$@"
+LAUNCHER
+chmod +x ~/gmail-creator
+echo "export PATH=\$HOME:\$PATH" >> ~/.bashrc
 
 echo ""
 echo "╔═══════════════════════════════════════╗"
 echo "║       ✅ Setup Complete!              ║"
 echo "╠═══════════════════════════════════════╣"
 echo "║                                       ║"
-echo "║  Run the creator:                     ║"
-echo "║    python main.py                     ║"
+echo "║  Run:                                 ║"
+echo "║    python3.11 main.py                 ║"
+echo "║    # or                               ║"
+echo "║    ~/gmail-creator                    ║"
 echo "║                                       ║"
 echo "║  Quick test:                          ║"
-echo "║    python main.py --test              ║"
-echo "║                                       ║"
-echo "║  CLI options:                         ║"
-echo "║    python main.py -n 5  (5 accounts) ║"
-echo "║    python main.py --list             ║"
-echo "║                                       ║"
-echo "║  SMS providers (env vars):            ║"
-echo "║    export SMS_ACTIVATE_API_KEY=...    ║"
-echo "║    export FIVE_SIM_API_KEY=...        ║"
-echo "║    export PROXY=socks5://...          ║"
+echo "║    python3.11 main.py --test          ║"
 echo "║                                       ║"
 echo "╚═══════════════════════════════════════╝"
