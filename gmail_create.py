@@ -267,31 +267,90 @@ class GmailCreator:
         time.sleep(random.uniform(0.3, 0.6))
 
         # ── Gender (Material Design custom dropdown) ──
+        # Google's gender field is <input type=text aria-label="What's your gender?">
+        # It's a custom dropdown — clicking opens a list of options
         gender_val = random.choice(["1", "2", "3"])
         gender_labels = {"1": "Female", "2": "Male", "3": "Rather not say"}
         gender_label = gender_labels[gender_val]
         print(f"   ⚧ Selecting gender: {gender_label}")
 
-        gender_triggered = False
-        for selector in [
-            '[aria-label*="gender" i]',
-            '[aria-label*="Gender"]',
-        ]:
+        # Debug: dump ALL elements with "gender" in any attribute
+        print("   🔎 Scanning for gender elements...")
+        for tag in ["input", "div", "button", "span", "select", "li", "ul"]:
             try:
-                el = driver.find_element(By.CSS_SELECTOR, selector)
-                if el.is_displayed():
-                    el.click()
-                    time.sleep(0.5)
-                    gender_triggered = True
-                    print(f"   ⚧ Gender trigger found via: {selector}")
-                    break
+                els = driver.find_elements(By.TAG_NAME, tag)
+                for el in els:
+                    name = el.get_attribute("name") or ""
+                    aid = el.get_attribute("id") or ""
+                    aria = el.get_attribute("aria-label") or ""
+                    role = el.get_attribute("role") or ""
+                    cls = el.get_attribute("class") or ""
+                    txt = el.text[:30] if el.text else ""
+                    if ("gender" in name.lower() or "gender" in aid.lower()
+                            or "gender" in aria.lower() or "gender" in role.lower()
+                            or "gender" in cls.lower() or "gender" in txt.lower()):
+                        print(f"      <{tag}> name={name} id={aid} aria={aria} "
+                              f"role={role} class={cls[:40]} text={txt} "
+                              f"visible={el.is_displayed()}")
             except Exception:
                 continue
 
+        gender_triggered = False
+
+        # Strategy 1: aria-label containing "gender"
+        for selector in [
+            '[aria-label*="gender" i]',
+            '[aria-label*="Gender"]',
+            '#gender',
+            '[name*="gender" i]',
+            '[id*="gender" i]',
+        ]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, selector)
+                displayed = el.is_displayed()
+                tag_name = el.tag_name
+                print(f"   ⚧ Found via {selector}: <{tag_name}> displayed={displayed}")
+                # Click even if not fully displayed — Material Design may still respond
+                el.click()
+                time.sleep(0.8)
+                gender_triggered = True
+                print(f"   ⚧ Gender trigger clicked via: {selector}")
+                break
+            except Exception as e:
+                continue
+
+        # Strategy 2: find div/button/label with "gender" text
+        if not gender_triggered:
+            try:
+                el = driver.find_element(By.XPATH,
+                    "//*[contains(text(),'gender') or contains(text(),'Gender') or "
+                    "contains(@aria-label,'gender') or contains(@aria-label,'Gender')]"
+                )
+                print(f"   ⚧ Found gender element via text: <{el.tag_name}> text={el.text[:30]}")
+                el.click()
+                time.sleep(0.8)
+                gender_triggered = True
+            except Exception:
+                pass
+
         if gender_triggered:
             self._select_dropdown_option(gender_label)
+
+            # Verify gender was selected by checking if dropdown closed
+            time.sleep(0.5)
+            # Try to find the selected value in the input
+            try:
+                for sel in ['[aria-label*="gender" i]', '[name*="gender" i]',
+                           '#gender', '[id*="gender" i]']:
+                    el = driver.find_element(By.CSS_SELECTOR, sel)
+                    val = el.get_attribute("value") or ""
+                    if val:
+                        print(f"   ⚧ Gender field value: {val}")
+                        break
+            except Exception:
+                pass
         else:
-            # Fallback: native select
+            # Last resort: try native select
             try:
                 from selenium.webdriver.support.ui import Select
                 sel = driver.find_element(By.CSS_SELECTOR,
@@ -299,10 +358,89 @@ class GmailCreator:
                 Select(sel).select_by_value(gender_val)
                 print("   ⚧ Gender: used native <select> fallback")
             except Exception:
-                print("   ⚠️  Gender dropdown not found, skipping")
+                print("   ⚠️  Gender element not found — form may reject submission")
+                print("   ⚠️  Trying to continue anyway...")
 
         self.browser.random_delay(0.5, 1.5)
+
+        # ── Verify page navigated after Next ──
+        url_before = self.browser.page_url
+        print(f"   📍 URL before Next: {url_before[:80]}...")
         self._click_next()
+        time.sleep(3)  # Wait for page navigation
+
+        url_after = self.browser.page_url
+        print(f"   📍 URL after Next: {url_after[:80]}...")
+        if url_before == url_after:
+            print("   ⚠️  Page did NOT navigate! Form may have validation errors.")
+            # Check for error messages on the page
+            for sel in ['[role="alert"]', '[aria-live="assertive"]',
+                       '.error', '[class*="error" i]', '[class*="invalid" i]']:
+                try:
+                    err = driver.find_element(By.CSS_SELECTOR, sel)
+                    if err.is_displayed() and err.text:
+                        print(f"   ❌ Validation error: {err.text[:100]}")
+                        break
+                except Exception:
+                    continue
+            # Try clicking Next again
+            print("   🔄 Retrying Next click...")
+            self._click_next()
+            time.sleep(3)
+            url_retry = self.browser.page_url
+            if url_before == url_retry:
+                print("   ❌ Still on same page — gender may be required")
+                # Try to select gender one more time
+                print("   🔄 Attempting gender selection one more time...")
+                self._retry_gender_selection(driver, gender_label, gender_val)
+
+    def _retry_gender_selection(self, driver, gender_label: str, gender_val: str):
+        """Last resort: brute-force find and click the gender dropdown."""
+        from selenium.webdriver.common.by import By
+        print("   ══ RETRY GENDER ══")
+
+        # Dump ALL clickable elements to find the gender dropdown
+        all_clickable = driver.find_elements(By.XPATH,
+            "//*[(self::input or self::div or self::button or self::span or "
+            "self::label or self::li or self::ul or self::select) "
+            "and @is_displayed() or 1=1]"
+        )
+        for el in all_clickable:
+            try:
+                if not el.is_displayed():
+                    continue
+                tag = el.tag_name
+                aria = el.get_attribute("aria-label") or ""
+                text = el.text[:40] if el.text else ""
+                role = el.get_attribute("role") or ""
+                if "gender" in aria.lower() or "gender" in text.lower():
+                    print(f"   ⚧ Found: <{tag}> aria={aria} text={text} role={role}")
+                    el.click()
+                    time.sleep(0.8)
+                    # Try to click the option
+                    self._select_dropdown_option(gender_label)
+                    return
+            except Exception:
+                continue
+
+        # Try typing into gender input directly
+        try:
+            el = driver.find_element(By.CSS_SELECTOR,
+                'input[aria-label*="gender" i], input[aria-label*="Gender"]')
+            el.clear()
+            el.send_keys(gender_label)
+            print(f"   ⚧ Typed '{gender_label}' into gender input")
+            time.sleep(0.5)
+            # Press arrow down + enter to select from autocomplete
+            from selenium.webdriver.common.keys import Keys
+            el.send_keys(Keys.ARROW_DOWN)
+            time.sleep(0.3)
+            el.send_keys(Keys.ENTER)
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"   ❌ Gender retry failed: {e}")
+
+        print("   ══ END RETRY ══")
 
     def _select_dropdown_option(self, option_text: str):
         """After clicking a Material Design dropdown, select the option by text."""
