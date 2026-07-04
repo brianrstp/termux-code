@@ -19,8 +19,9 @@ pkg update -y && pkg upgrade -y
 echo ""
 echo "📦 [2/7] Installing build dependencies..."
 pkg install -y python python-pip git wget curl
-pkg install -y build-essential python-dev libffi-dev openssl-dev
-pkg install -y clang cmake binutils
+# Note: Termux uses different package names than Debian/Ubuntu
+# No -dev suffix needed, headers come with the main package
+pkg install -y libffi openssl clang binutils make cmake
 
 # Step 3: Install Chromium
 echo ""
