@@ -26,7 +26,17 @@ pkg install -y libffi openssl clang binutils make cmake
 # Step 3: Install Chromium
 echo ""
 echo "🌐 [3/7] Installing Chromium browser..."
-pkg install -y chromium
+# Chromium is NOT in default Termux repo — need x11-repo first
+pkg install -y x11-repo 2>/dev/null || true
+pkg install -y chromium 2>/dev/null || {
+    echo "⚠️  chromium not in x11-repo, trying tur-repo..."
+    pkg install -y tur-repo 2>/dev/null || true
+    pkg install -y chromium 2>/dev/null || {
+        echo "⚠️  Chromium package not available."
+        echo "    Will use playwright's bundled chromium instead."
+        echo "    (This requires playwright to be built from source)"
+    }
+}
 
 # Step 4: Install Python packages
 echo ""
