@@ -28,15 +28,35 @@ pkg install -y nodejs
 # Step 4: Install Python dependencies
 echo ""
 echo "📦 [4/7] Installing Python packages..."
-pip install --upgrade pip
-pip install -r requirements.txt
+pip install --upgrade pip setuptools wheel
 
-# Step 5: Install Playwright browsers
+# Install playwright - ARM/Termux needs special handling
+echo "🔧 Installing playwright (may take a while on ARM)..."
+pip install playwright 2>/dev/null || {
+    echo "⚠️  Standard install failed, trying without binary..."
+    pip install --no-binary playwright playwright
+}
+
+# Install other dependencies
+pip install faker rich requests
+
+# Step 5: Setup Chromium (system + playwright)
 echo ""
-echo "🌐 [5/7] Installing Playwright Chromium..."
-echo "This may take a few minutes..."
-python -m playwright install chromium
-python -m playwright install-deps chromium 2>/dev/null || true
+echo "🌐 [5/7] Setting up Chromium..."
+pkg install -y chromium 2>/dev/null || true
+
+python -m playwright install chromium 2>/dev/null || {
+    echo "⚠️  Playwright chromium failed on ARM, using system chromium"
+    CHROMIUM_PATH=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || echo "")
+    if [ -n "$CHROMIUM_PATH" ]; then
+        echo "✅ System chromium: $CHROMIUM_PATH"
+        export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$CHROMIUM_PATH"
+        echo "export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_PATH" >> ~/.bashrc
+    else
+        echo "❌ No chromium found. Run: pkg install chromium"
+    fi
+}
+python -m playwright install-deps 2>/dev/null || true
 
 # Step 6: Create data directory
 echo ""

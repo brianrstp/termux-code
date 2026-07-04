@@ -5,6 +5,7 @@ Replaces Chromax browser from Windows version.
 """
 import asyncio
 import random
+import os
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from config import (
@@ -44,7 +45,27 @@ class StealthBrowser:
         if self.proxy:
             launch_args["proxy"] = {"server": self.proxy}
 
-        self._browser = await self._playwright.chromium.launch(**launch_args)
+        # Try launching - fallback to system chromium on ARM/Termux
+        try:
+            self._browser = await self._playwright.chromium.launch(**launch_args)
+        except Exception as e:
+            print(f"⚠️  Chromium launch failed: {e}")
+            print("🔄 Trying system chromium...")
+            import shutil
+            system_chromium = (
+                shutil.which("chromium-browser")
+                or shutil.which("chromium")
+                or os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+            )
+            if system_chromium:
+                launch_args["executable_path"] = system_chromium
+                self._browser = await self._playwright.chromium.launch(**launch_args)
+            else:
+                raise RuntimeError(
+                    "No chromium found! Install with:\n"
+                    "  pkg install chromium\n"
+                    "or run: python -m playwright install chromium"
+                )
 
         # Determine viewport & user agent from profile
         vp = self.profile.get("viewport", VIEWPORT)
