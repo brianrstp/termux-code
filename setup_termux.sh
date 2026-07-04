@@ -33,7 +33,7 @@ pkg install -y chromium 2>/dev/null || {
 # Step 4: Install Python packages
 echo ""
 echo "📦 [4/5] Installing Python packages..."
-pip install --upgrade pip
+# Do NOT run 'pip install --upgrade pip' on Termux — it breaks the package
 pip install selenium webdriver-manager faker rich requests
 
 # Step 5: Verify installation
