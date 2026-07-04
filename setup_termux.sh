@@ -43,13 +43,13 @@ echo ""
 echo "📦 [4/7] Installing Python packages..."
 pip install --upgrade pip setuptools wheel cffi
 
-echo "🔧 Building playwright from source (10-20 min, be patient)..."
-pip install --no-binary :all: playwright || {
-    echo "⚠️  Full build failed. Trying minimal build..."
-    pip install --no-binary playwright playwright || {
-        echo "❌ Could not install playwright."
-        echo "    Falling back to requests-only mode."
-        echo "    Browser features will be limited."
+# Playwright is NOT on PyPI for ARM/Termux — must install from GitHub
+echo "🔧 Installing playwright from GitHub source (may take 5-10 min)..."
+pip install git+https://github.com/microsoft/playwright-python.git 2>/dev/null || {
+    echo "⚠️  GitHub install failed. Trying with --no-build-isolation..."
+    pip install --no-build-isolation git+https://github.com/microsoft/playwright-python.git 2>/dev/null || {
+        echo "❌ Playwright install failed. The project will run in HTTP-only mode."
+        echo "    Browser-based features will not work."
     }
 }
 
