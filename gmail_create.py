@@ -266,100 +266,64 @@ class GmailCreator:
             raise RuntimeError("❌ Cannot find year input")
         time.sleep(random.uniform(0.3, 0.6))
 
-        # ── Gender (Material Design custom dropdown) ──
-        # Google's gender field is <input type=text aria-label="What's your gender?">
-        # It's a custom dropdown — clicking opens a list of options
+        # ── Gender (Material Design combobox) ──
+        # Actual structure found via debug:
+        #   <input id="" aria-label="What's your gender?" visible=False> (hidden)
+        #   <div id="gender" role="combobox" visible=True> ← THIS is the trigger
+        #   <span>Gender</span> ← label
         gender_val = random.choice(["1", "2", "3"])
         gender_labels = {"1": "Female", "2": "Male", "3": "Rather not say"}
         gender_label = gender_labels[gender_val]
         print(f"   ⚧ Selecting gender: {gender_label}")
 
-        # Debug: dump ALL elements with "gender" in any attribute
-        print("   🔎 Scanning for gender elements...")
-        for tag in ["input", "div", "button", "span", "select", "li", "ul"]:
-            try:
-                els = driver.find_elements(By.TAG_NAME, tag)
-                for el in els:
-                    name = el.get_attribute("name") or ""
-                    aid = el.get_attribute("id") or ""
-                    aria = el.get_attribute("aria-label") or ""
-                    role = el.get_attribute("role") or ""
-                    cls = el.get_attribute("class") or ""
-                    txt = el.text[:30] if el.text else ""
-                    if ("gender" in name.lower() or "gender" in aid.lower()
-                            or "gender" in aria.lower() or "gender" in role.lower()
-                            or "gender" in cls.lower() or "gender" in txt.lower()):
-                        print(f"      <{tag}> name={name} id={aid} aria={aria} "
-                              f"role={role} class={cls[:40]} text={txt} "
-                              f"visible={el.is_displayed()}")
-            except Exception:
-                continue
-
         gender_triggered = False
 
-        # Strategy 1: aria-label containing "gender"
+        # Strategy 1: #gender div with role=combobox (the VISIBLE trigger)
         for selector in [
-            '[aria-label*="gender" i]',
-            '[aria-label*="Gender"]',
             '#gender',
-            '[name*="gender" i]',
-            '[id*="gender" i]',
+            '[role="combobox"][id*="gender" i]',
+            'div[id="gender"]',
+            'div[role="combobox"]',
         ]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, selector)
-                displayed = el.is_displayed()
-                tag_name = el.tag_name
-                print(f"   ⚧ Found via {selector}: <{tag_name}> displayed={displayed}")
-                # Click even if not fully displayed — Material Design may still respond
-                el.click()
-                time.sleep(0.8)
-                gender_triggered = True
-                print(f"   ⚧ Gender trigger clicked via: {selector}")
-                break
-            except Exception as e:
-                continue
-
-        # Strategy 2: find div/button/label with "gender" text
-        if not gender_triggered:
-            try:
-                el = driver.find_element(By.XPATH,
-                    "//*[contains(text(),'gender') or contains(text(),'Gender') or "
-                    "contains(@aria-label,'gender') or contains(@aria-label,'Gender')]"
-                )
-                print(f"   ⚧ Found gender element via text: <{el.tag_name}> text={el.text[:30]}")
-                el.click()
-                time.sleep(0.8)
-                gender_triggered = True
+                if el.is_displayed():
+                    print(f"   ⚧ Gender trigger: <{el.tag_name}> id={el.get_attribute('id')} "
+                          f"role={el.get_attribute('role')} class={el.get_attribute('class')[:40]}")
+                    el.click()
+                    time.sleep(0.8)
+                    gender_triggered = True
+                    print(f"   ⚧ Gender dropdown opened via: {selector}")
+                    break
             except Exception:
-                pass
+                continue
 
         if gender_triggered:
             self._select_dropdown_option(gender_label)
-
-            # Verify gender was selected by checking if dropdown closed
-            time.sleep(0.5)
-            # Try to find the selected value in the input
-            try:
-                for sel in ['[aria-label*="gender" i]', '[name*="gender" i]',
-                           '#gender', '[id*="gender" i]']:
-                    el = driver.find_element(By.CSS_SELECTOR, sel)
-                    val = el.get_attribute("value") or ""
-                    if val:
-                        print(f"   ⚧ Gender field value: {val}")
-                        break
-            except Exception:
-                pass
         else:
-            # Last resort: try native select
+            # Last resort: try typing into the hidden input + arrow keys
             try:
-                from selenium.webdriver.support.ui import Select
-                sel = driver.find_element(By.CSS_SELECTOR,
-                    'select[name*="gender" i], select[id*="gender" i], select')
-                Select(sel).select_by_value(gender_val)
-                print("   ⚧ Gender: used native <select> fallback")
+                el = driver.find_element(By.CSS_SELECTOR, '#gender')
+                driver.execute_script("arguments[0].click();", el)
+                time.sleep(0.8)
+                gender_triggered = True
+                self._select_dropdown_option(gender_label)
+                print("   ⚧ Gender: used JS click fallback")
             except Exception:
-                print("   ⚠️  Gender element not found — form may reject submission")
-                print("   ⚠️  Trying to continue anyway...")
+                try:
+                    el = driver.find_element(By.CSS_SELECTOR,
+                        'input[aria-label*="gender" i]')
+                    driver.execute_script("arguments[0].removeAttribute('disabled');", el)
+                    el.click()
+                    time.sleep(0.5)
+                    from selenium.webdriver.common.keys import Keys
+                    el.send_keys(gender_label)
+                    el.send_keys(Keys.ARROW_DOWN)
+                    el.send_keys(Keys.ENTER)
+                    gender_triggered = True
+                    print("   ⚧ Gender: typed + arrow fallback")
+                except Exception:
+                    print("   ⚠️  Gender selection failed completely")
 
         self.browser.random_delay(0.5, 1.5)
 
@@ -844,7 +808,21 @@ class GmailCreator:
 
     def _click_next(self):
         driver = self.browser.driver
-        # Strategy 1: find button/link with "Next" text
+
+        # Strategy 0: known Google signup Next button IDs
+        for sel in ['#birthdaygenderNext', '#firstNameNext',
+                    '[id$="Next"]', '[id*="next" i]']:
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, sel)
+                if btn.is_displayed():
+                    btn.click()
+                    print(f"   ▶️ Clicked Next via ID: {sel}")
+                    self.browser.random_delay(1, 2)
+                    return
+            except Exception:
+                continue
+
+        # Strategy 1: find button with "Next" or "Continue" text
         for text in ["Next", "Continue"]:
             try:
                 btn = driver.find_element(By.XPATH,
