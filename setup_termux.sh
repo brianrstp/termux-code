@@ -36,14 +36,39 @@ echo "📦 [4/5] Installing Python packages..."
 # Do NOT run 'pip install --upgrade pip' on Termux — it breaks the package
 pip install selenium webdriver-manager faker rich requests
 
-# Step 5: Verify installation
+# Step 5: Setup chromedriver
 echo ""
-echo "✅ [5/5] Verifying..."
-python -c "from selenium import webdriver; print('✅ Selenium OK')"
-python -c "from faker import Faker; print('✅ Faker OK')"
-python -c "from rich.console import Console; print('✅ Rich OK')"
-CHROMIUM_PATH=$(which chromium 2>/dev/null || echo "not found")
-echo "🌐 Chromium: $CHROMIUM_PATH"
+echo "🔧 [5/5] Setting up chromedriver..."
+# Try Termux package first
+pkg install -y chromium-driver 2>/dev/null || true
+
+# Find chromedriver
+CHROMEDRIVER_PATH=$(which chromedriver 2>/dev/null || echo "")
+if [ -z "$CHROMEDRIVER_PATH" ]; then
+    echo "⚠️  chromedriver not found via pkg. Downloading for ARM..."
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ]; then
+        CHROME_VER=$(chromium --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "120")
+        echo "   Chromium version: $CHROME_VER"
+        echo "   Downloading chromedriver for aarch64..."
+        wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VER}.0.6099.0/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip 2>/dev/null || \
+        wget -q "https://chromedriver.storage.googleapis.com/${CHROME_VER}.0.6099.0/chromedriver_linux64.zip" -O /tmp/chromedriver.zip 2>/dev/null || true
+        if [ -f /tmp/chromedriver.zip ]; then
+            unzip -o /tmp/chromedriver.zip -d /tmp/ 2>/dev/null
+            cp /tmp/chromedriver-linux64/chromedriver /data/data/com.termux/files/usr/bin/ 2>/dev/null || true
+            chmod +x /data/data/com.termux/files/usr/bin/chromedriver 2>/dev/null || true
+            rm -f /tmp/chromedriver.zip
+            rm -rf /tmp/chromedriver-linux64
+            echo "✅ chromedriver installed"
+        else
+            echo "⚠️  Auto-download failed. Install chromedriver manually."
+        fi
+    fi
+fi
+
+# Verify
+CHROMEDRIVER_PATH=$(which chromedriver 2>/dev/null || echo "not found")
+echo "🔧 chromedriver: $CHROMEDRIVER_PATH"
 
 echo ""
 echo "╔═══════════════════════════════════════╗"

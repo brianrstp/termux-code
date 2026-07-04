@@ -74,7 +74,29 @@ class StealthBrowser:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
 
-        self._driver = webdriver.Chrome(options=options)
+        # Find chromedriver
+        chromedriver_path = (
+            shutil.which("chromedriver")
+            or "/data/data/com.termux/files/usr/bin/chromedriver"
+        )
+        service = None
+        if chromedriver_path and __import__("os").path.exists(chromedriver_path):
+            from selenium.webdriver.chrome.service import Service
+            service = Service(executable_path=chromedriver_path)
+            print(f"🔧 Using chromedriver: {chromedriver_path}")
+
+        # Try launching — fallback to webdriver-manager
+        try:
+            if service:
+                self._driver = webdriver.Chrome(service=service, options=options)
+            else:
+                self._driver = webdriver.Chrome(options=options)
+        except Exception:
+            print("⚠️  Chromedriver not found, using webdriver-manager...")
+            from webdriver_manager.chrome import ChromeDriverManager
+            from selenium.webdriver.chrome.service import Service as ChromeService
+            service = ChromeService(ChromeDriverManager().install())
+            self._driver = webdriver.Chrome(service=service, options=options)
 
         # Anti-detection JS
         self._driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
