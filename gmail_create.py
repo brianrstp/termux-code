@@ -138,104 +138,249 @@ class GmailCreator:
         self._click_next()
 
     def _fill_birthday_gender(self):
-        from selenium.webdriver.support.ui import Select
         from selenium.webdriver.common.by import By
 
-        # Google's signup form changes frequently — try multiple selector strategies
-        # Debug: dump available selects and inputs on page
         driver = self.browser.driver
-        selects = driver.find_elements(By.TAG_NAME, "select")
-        inputs = driver.find_elements(By.TAG_NAME, "input")
-        print(f"   🔎 Found {len(selects)} <select> and {len(inputs)} <input> elements")
-        for s in selects:
-            print(f"      <select> name={s.get_attribute('name')} id={s.get_attribute('id')} "
-                  f"aria-label={s.get_attribute('aria-label')}")
-        for inp in inputs:
-            t = inp.get_attribute("type") or "text"
-            if t not in ("hidden",):
-                print(f"      <input type={t}> name={inp.get_attribute('name')} "
-                      f"id={inp.get_attribute('id')} aria-label={inp.get_attribute('aria-label')}")
 
-        # ── Month ──
+        # ── Month (Material Design custom dropdown) ──
         month = random.randint(1, 12)
-        month_val = str(month).zfill(2)
-        month_select = None
-        for sel in selects:
-            name = (sel.get_attribute("name") or "").lower()
-            aid = (sel.get_attribute("id") or "").lower()
-            aria = (sel.get_attribute("aria-label") or "").lower()
-            if any(k in name or k in aid or k in aria for k in ["month"]):
-                month_select = sel
-                break
-        if month_select:
-            print(f"   📅 Month select found: name={month_select.get_attribute('name')}")
-            Select(month_select).select_by_value(month_val)
+        month_names = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ]
+        month_name = month_names[month - 1]
+        print(f"   📅 Selecting month: {month_name}")
+
+        # Find month dropdown trigger — look for role="combobox" or
+        # div containing "Month" text near the birthday section
+        month_triggered = False
+
+        # Strategy 1: aria-label or id containing "month"
+        for selector in [
+            '[aria-label*="Month" i]',
+            '[aria-label*="month" i]',
+            '#month',
+            '[id*="month" i]',
+        ]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, selector)
+                if el.is_displayed():
+                    el.click()
+                    time.sleep(0.5)
+                    month_triggered = True
+                    print(f"   📅 Month trigger found via: {selector}")
+                    break
+            except Exception:
+                continue
+
+        # Strategy 2: find a clickable div/button with "Month" text
+        if not month_triggered:
+            try:
+                el = driver.find_element(By.XPATH,
+                    "//*[contains(@role,'combobox') or contains(@role,'listbox')]"
+                    "[.//span[contains(text(),'Month') or contains(text(),'month')]]"
+                )
+                if el.is_displayed():
+                    el.click()
+                    time.sleep(0.5)
+                    month_triggered = True
+                    print("   📅 Month trigger found via role combobox/listbox")
+            except Exception:
+                pass
+
+        # Strategy 3: find element containing text "Month"
+        if not month_triggered:
+            try:
+                el = driver.find_element(By.XPATH,
+                    "//*[contains(text(),'Month') and "
+                    "(self::div or self::button or self::span or self::input)]"
+                )
+                if el.is_displayed():
+                    el.click()
+                    time.sleep(0.5)
+                    month_triggered = True
+                    print("   📅 Month trigger found via text 'Month'")
+            except Exception:
+                pass
+
+        if month_triggered:
+            # Now click the month option
+            self._select_dropdown_option(month_name)
         else:
-            # Fallback: try by index (month is often the first select)
-            if selects:
-                print(f"   📅 Using first <select> for month (index fallback)")
-                Select(selects[0]).select_by_value(month_val)
-            else:
+            # Fallback: try native select
+            try:
+                from selenium.webdriver.support.ui import Select
+                sel = driver.find_element(By.CSS_SELECTOR,
+                    'select[name*="month" i], select[id*="month" i], select')
+                Select(sel).select_by_value(str(month).zfill(2))
+                print("   📅 Month: used native <select> fallback")
+            except Exception:
+                print("   ⚠️  Month dropdown not found — trying screenshot debug")
+                self._debug_dump()
                 raise RuntimeError("❌ Cannot find month dropdown on page")
+
         time.sleep(random.uniform(0.3, 0.6))
 
-        # ── Day ──
+        # ── Day (input[type=tel]) ──
         day_val = str(random.randint(1, 28))
+        print(f"   📅 Day: {day_val}")
         day_input = None
-        for inp in inputs:
-            name = (inp.get_attribute("name") or "").lower()
-            aid = (inp.get_attribute("id") or "").lower()
-            aria = (inp.get_attribute("aria-label") or "").lower()
-            if any(k in name or k in aid or k in aria for k in ["day"]):
-                day_input = inp
-                break
+        for sel_str in ['input[name="day"]', '#day',
+                        'input[aria-label*="Day" i]']:
+            try:
+                day_input = driver.find_element(By.CSS_SELECTOR, sel_str)
+                if day_input.is_displayed():
+                    break
+                day_input = None
+            except Exception:
+                continue
         if day_input:
-            print(f"   📅 Day input found: name={day_input.get_attribute('name')}")
             day_input.click()
+            time.sleep(0.1)
+            day_input.clear()
             day_input.send_keys(day_val)
         else:
-            raise RuntimeError("❌ Cannot find day input on page")
+            raise RuntimeError("❌ Cannot find day input")
         time.sleep(random.uniform(0.3, 0.6))
 
-        # ── Year ──
+        # ── Year (input[type=tel]) ──
         year_val = str(random.randint(1990, 2006))
+        print(f"   📅 Year: {year_val}")
         year_input = None
-        for inp in inputs:
-            name = (inp.get_attribute("name") or "").lower()
-            aid = (inp.get_attribute("id") or "").lower()
-            aria = (inp.get_attribute("aria-label") or "").lower()
-            if any(k in name or k in aid or k in aria for k in ["year"]):
-                year_input = inp
-                break
+        for sel_str in ['input[name="year"]', '#year',
+                        'input[aria-label*="Year" i]']:
+            try:
+                year_input = driver.find_element(By.CSS_SELECTOR, sel_str)
+                if year_input.is_displayed():
+                    break
+                year_input = None
+            except Exception:
+                continue
         if year_input:
-            print(f"   📅 Year input found: name={year_input.get_attribute('name')}")
             year_input.click()
+            time.sleep(0.1)
+            year_input.clear()
             year_input.send_keys(year_val)
         else:
-            raise RuntimeError("❌ Cannot find year input on page")
+            raise RuntimeError("❌ Cannot find year input")
         time.sleep(random.uniform(0.3, 0.6))
 
-        # ── Gender ──
-        gender = random.choice(["1", "2", "3"])
-        gender_select = None
-        for sel in selects:
-            name = (sel.get_attribute("name") or "").lower()
-            aid = (sel.get_attribute("id") or "").lower()
-            aria = (sel.get_attribute("aria-label") or "").lower()
-            if any(k in name or k in aid or k in aria for k in ["gender"]):
-                gender_select = sel
-                break
-        if gender_select:
-            print(f"   📅 Gender select found: name={gender_select.get_attribute('name')}")
-            Select(gender_select).select_by_value(gender)
-        elif len(selects) >= 2:
-            print(f"   📅 Using second <select> for gender (index fallback)")
-            Select(selects[1]).select_by_value(gender)
+        # ── Gender (Material Design custom dropdown) ──
+        gender_val = random.choice(["1", "2", "3"])
+        gender_labels = {"1": "Female", "2": "Male", "3": "Rather not say"}
+        gender_label = gender_labels[gender_val]
+        print(f"   ⚧ Selecting gender: {gender_label}")
+
+        gender_triggered = False
+        for selector in [
+            '[aria-label*="gender" i]',
+            '[aria-label*="Gender"]',
+        ]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, selector)
+                if el.is_displayed():
+                    el.click()
+                    time.sleep(0.5)
+                    gender_triggered = True
+                    print(f"   ⚧ Gender trigger found via: {selector}")
+                    break
+            except Exception:
+                continue
+
+        if gender_triggered:
+            self._select_dropdown_option(gender_label)
         else:
-            print("   ⚠️  Gender select not found, skipping")
+            # Fallback: native select
+            try:
+                from selenium.webdriver.support.ui import Select
+                sel = driver.find_element(By.CSS_SELECTOR,
+                    'select[name*="gender" i], select[id*="gender" i], select')
+                Select(sel).select_by_value(gender_val)
+                print("   ⚧ Gender: used native <select> fallback")
+            except Exception:
+                print("   ⚠️  Gender dropdown not found, skipping")
 
         self.browser.random_delay(0.5, 1.5)
         self._click_next()
+
+    def _select_dropdown_option(self, option_text: str):
+        """After clicking a Material Design dropdown, select the option by text."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+        time.sleep(0.5)  # Wait for dropdown animation
+
+        # Strategy 1: li with matching text
+        try:
+            option = driver.find_element(By.XPATH,
+                f"//li[.//text()[contains(.,'{option_text}')] or "
+                f".//span[contains(text(),'{option_text}')]]"
+            )
+            option.click()
+            print(f"   ✅ Selected: {option_text} (via li)")
+            return
+        except Exception:
+            pass
+
+        # Strategy 2: div with role="option"
+        try:
+            option = driver.find_element(By.XPATH,
+                f"//*[@role='option'][contains(text(),'{option_text}')]"
+            )
+            option.click()
+            print(f"   ✅ Selected: {option_text} (via role=option)")
+            return
+        except Exception:
+            pass
+
+        # Strategy 3: any element with matching text in dropdown overlay
+        try:
+            option = driver.find_element(By.XPATH,
+                f"//*[contains(@class,'option') or contains(@class,'item')]"
+                f"[contains(text(),'{option_text}')]"
+            )
+            option.click()
+            print(f"   ✅ Selected: {option_text} (via class)")
+            return
+        except Exception:
+            pass
+
+        # Strategy 4: aria-selected or data-value
+        try:
+            option = driver.find_element(By.XPATH,
+                f"//*[@aria-selected='true' or @data-value='{option_text}']"
+            )
+            option.click()
+            print(f"   ✅ Selected: {option_text} (via aria/data)")
+            return
+        except Exception:
+            pass
+
+        print(f"   ⚠️  Could not select option '{option_text}' from dropdown")
+
+    def _debug_dump(self):
+        """Dump page HTML for debugging when elements can't be found."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+        print("\n   ══ DEBUG PAGE DUMP ══")
+        try:
+            # Find all interactive elements
+            for tag in ["select", "input", "button", "div[role]", "ul[role]"]:
+                try:
+                    els = driver.find_elements(By.CSS_SELECTOR, tag)
+                    for el in els:
+                        if el.is_displayed():
+                            name = el.get_attribute("name") or ""
+                            aid = el.get_attribute("id") or ""
+                            role = el.get_attribute("role") or ""
+                            aria = el.get_attribute("aria-label") or ""
+                            text = el.text[:50] if el.text else ""
+                            print(f"   <{tag}> name={name} id={aid} role={role} "
+                                  f"aria={aria} text={text}")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"   Debug dump failed: {e}")
+        print("   ══ END DUMP ══\n")
 
     def _choose_email(self):
         self.browser.wait_for('[data-email], input[type="email"], input[name="Username"]', timeout=10)
