@@ -1,10 +1,9 @@
 """
 Gmail Creator - Main Gmail Creation Logic
-Optimized for Termux/Android with Playwright + stealth.
+Selenium-based, optimized for Termux/Android.
 """
-import asyncio
 import random
-import re
+import time
 from faker import Faker
 
 from browser import StealthBrowser
@@ -17,7 +16,6 @@ from config import (
 
 fake = Faker()
 
-# Gmail signup URL
 SIGNUP_URL = "https://accounts.google.com/signup"
 
 
@@ -35,67 +33,62 @@ class GmailCreator:
         self.password = None
         self.email = None
 
-    async def create(self) -> dict:
-        """
-        Run the full Gmail creation flow.
-        Returns dict with account info or error.
-        """
+    def create(self) -> dict:
+        """Run the full Gmail creation flow."""
         result = {"success": False, "error": None, "email": None}
 
         try:
-            async with self.browser as browser:
-                page = self.browser.page
+            with self.browser:
+                driver = self.browser.driver
 
                 # Step 1: Warmup
                 print("🔄 Step 1: Browser warmup...")
-                await self._warmup(page)
+                self._warmup()
 
                 # Step 2: Navigate to signup
                 print("📝 Step 2: Opening signup page...")
-                await self._go_to_signup(page)
+                self._go_to_signup()
 
                 # Step 3: Fill name
                 print("👤 Step 3: Entering name...")
-                await self._fill_name(page)
+                self._fill_name()
 
                 # Step 4: Birthday & gender
                 print("🎂 Step 4: Birthday & gender...")
-                await self._fill_birthday_gender(page)
+                self._fill_birthday_gender()
 
                 # Step 5: Choose email
                 print("📧 Step 5: Choosing email...")
-                await self._choose_email(page)
+                self._choose_email()
 
                 # Step 6: Create password
                 print("🔐 Step 6: Creating password...")
-                await self._create_password(page)
+                self._create_password()
 
-                # Step 7: Phone verification (if required)
+                # Step 7: Phone verification
                 print("📱 Step 7: Phone verification...")
-                verified = await self._handle_verification(page)
+                verified = self._handle_verification()
                 if not verified:
                     result["error"] = "Verification failed"
                     return result
 
                 # Step 8: Skip optional steps
                 print("⏭️ Step 8: Skipping optional steps...")
-                await self._skip_optional(page)
+                self._skip_optional()
 
                 # Step 9: Accept terms
                 print("✅ Step 9: Accepting terms...")
-                await self._accept_terms(page)
+                self._accept_terms()
 
                 # Step 10: Verify success
-                print("🎉 Step 10: Verifying account creation...")
-                success = await self._verify_success(page)
+                print("🎉 Step 10: Verifying...")
+                success = self._verify_success()
 
                 if success:
                     result["success"] = True
                     result["email"] = self.email
                     result["password"] = self.password
                     result["name"] = f"{self.first_name} {self.last_name}"
-
-                    # Save to storage
                     save_account(
                         email=self.email,
                         password=self.password,
@@ -115,443 +108,283 @@ class GmailCreator:
     # Flow Steps
     # ========================
 
-    async def _warmup(self, page):
-        """Visit sites to warm up browser fingerprint."""
-        pages_to_visit = [
-            "https://www.google.com",
-            "https://about.google",
-        ]
-        for url in pages_to_visit:
+    def _warmup(self):
+        for url in ["https://www.google.com", "https://about.google"]:
             try:
-                await page.goto(url, timeout=PAGE_LOAD_TIMEOUT)
-                await self.browser.random_delay(2, 5)
-                # Simulate scrolling
-                await self.browser.scroll_page(page, "down")
-                await self.browser.random_delay(1, 2)
+                self.browser.driver.get(url)
+                self.browser.random_delay(2, 5)
+                self.browser.scroll_page("down")
+                self.browser.random_delay(1, 2)
             except Exception:
                 pass
 
-    async def _go_to_signup(self, page):
-        """Navigate to Gmail signup page."""
-        await page.goto(SIGNUP_URL, timeout=PAGE_LOAD_TIMEOUT, wait_until="networkidle")
-        await self.browser.random_delay(1, 3)
+    def _go_to_signup(self):
+        self.browser.driver.get(SIGNUP_URL)
+        self.browser.random_delay(2, 4)
+        self.browser.wait_for('input[name="firstName"]', timeout=15)
 
-        # Check if we're on the right page
-        await page.wait_for_selector('input[name="firstName"]', timeout=15000)
+    def _fill_name(self):
+        first = self.browser.find('input[name="firstName"]')
+        first.click()
+        time.sleep(random.uniform(0.2, 0.5))
+        first.send_keys(self.first_name)
+        self.browser.random_delay(0.3, 0.8)
 
-    async def _fill_name(self, page):
-        """Enter first and last name."""
-        first_name_input = page.locator('input[name="firstName"]')
-        await first_name_input.click()
-        await asyncio.sleep(random.uniform(0.2, 0.5))
-        await first_name_input.type(self.first_name, delay=random.uniform(40, 110))
+        last = self.browser.find('input[name="lastName"]')
+        last.click()
+        time.sleep(random.uniform(0.2, 0.5))
+        last.send_keys(self.last_name)
+        self.browser.random_delay(0.5, 1.0)
+        self._click_next()
 
-        await self.browser.random_delay(0.3, 0.8)
+    def _fill_birthday_gender(self):
+        self.browser.wait_for('select[name="month"]', timeout=10)
 
-        last_name_input = page.locator('input[name="lastName"]')
-        await last_name_input.click()
-        await asyncio.sleep(random.uniform(0.2, 0.5))
-        await last_name_input.type(self.last_name, delay=random.uniform(40, 110))
-
-        await self.browser.random_delay(0.5, 1.0)
-
-        # Click Next
-        await self._click_next(page)
-
-    async def _fill_birthday_gender(self, page):
-        """Enter birthday and gender."""
-        await page.wait_for_selector('select[name="month"]', timeout=10000)
-
-        # Month
         month = random.randint(1, 12)
-        await page.select_option('select[name="month"]', str(month).zfill(2))
-        await asyncio.sleep(random.uniform(0.3, 0.6))
+        from selenium.webdriver.support.ui import Select
+        Select(self.browser.find('select[name="month"]')).select_by_value(str(month).zfill(2))
+        time.sleep(random.uniform(0.3, 0.6))
 
-        # Day
-        day = random.randint(1, 28)
-        await page.fill('input[name="day"]', str(day))
-        await asyncio.sleep(random.uniform(0.3, 0.6))
+        day = self.browser.find('input[name="day"]')
+        day.send_keys(str(random.randint(1, 28)))
+        time.sleep(random.uniform(0.3, 0.6))
 
-        # Year (18-35 years old)
-        year = random.randint(1990, 2006)
-        await page.fill('input[name="year"]', str(year))
-        await asyncio.sleep(random.uniform(0.3, 0.6))
+        year = self.browser.find('input[name="year"]')
+        year.send_keys(str(random.randint(1990, 2006)))
+        time.sleep(random.uniform(0.3, 0.6))
 
-        # Gender
-        gender = random.choice(["1", "2", "3"])  # 1=Male, 2=Female, 3=Rather not say
-        await page.select_option('select[name="gender"]', gender)
+        gender = random.choice(["1", "2", "3"])
+        Select(self.browser.find('select[name="gender"]')).select_by_value(gender)
 
-        await self.browser.random_delay(0.5, 1.5)
-        await self._click_next(page)
+        self.browser.random_delay(0.5, 1.5)
+        self._click_next()
 
-    async def _choose_email(self, page):
-        """Choose or create email address."""
-        await page.wait_for_selector('[data-email], input[type="email"], [aria-label*="Username"]',
-                                      timeout=10000)
+    def _choose_email(self):
+        self.browser.wait_for('[data-email], input[type="email"], input[name="Username"]', timeout=10)
 
-        # Try to find "Create your own" option
+        # Try suggestion
         try:
-            create_own = page.locator('text=Create your own Gmail address')
-            if await create_own.is_visible(timeout=3000):
-                await create_own.click()
-                await asyncio.sleep(1)
+            suggestion = self.browser.safe_find('[data-email]')
+            if suggestion and suggestion.is_displayed():
+                self.email = suggestion.get_attribute("data-email")
+                self.username = self.email.split("@")[0]
+                self.human_click(suggestion)
+                self.browser.random_delay(0.5, 1.0)
+                self._click_next()
+                return
         except Exception:
             pass
 
-        # Check if there's a suggested email we can use
-        try:
-            suggestion = page.locator('[data-email]').first
-            if await suggestion.is_visible(timeout=2000):
-                suggested_email = await suggestion.get_attribute("data-email")
-                if suggested_email:
-                    self.username = suggested_email.split("@")[0]
-                    self.email = suggested_email
-                    await suggestion.click()
-                    await self.browser.random_delay(0.5, 1.0)
-                    await self._click_next(page)
-                    return
-        except Exception:
-            pass
-
-        # Generate and type custom username
+        # Custom username
         self.username = self._generate_username()
         self.email = f"{self.username}@gmail.com"
 
-        username_input = page.locator('input[name="Username"], input[type="email"]')
-        await username_input.click()
-        await asyncio.sleep(random.uniform(0.2, 0.5))
-        await username_input.fill("")  # Clear first
-        await username_input.type(self.username, delay=random.uniform(40, 110))
+        username_input = self.browser.safe_find('input[name="Username"]') or self.browser.safe_find('input[type="email"]')
+        if username_input:
+            username_input.click()
+            time.sleep(random.uniform(0.2, 0.5))
+            username_input.clear()
+            username_input.send_keys(self.username)
+            self.browser.random_delay(0.5, 1.0)
+            self._click_next()
 
-        await self.browser.random_delay(0.5, 1.0)
-        await self._click_next(page)
-
-        # Check if username is taken
-        await asyncio.sleep(2)
-        error = await page.query_selector('[aria-live="assertive"]')
-        if error:
-            error_text = await error.text_content()
-            if error_text and ("taken" in error_text.lower() or "already" in error_text.lower()):
-                # Try with numbers
+            # Check taken
+            time.sleep(2)
+            error = self.browser.safe_find('[aria-live="assertive"]')
+            if error and ("taken" in (error.text or "").lower() or "already" in (error.text or "").lower()):
                 self.username = f"{self.username}{random.randint(100, 999)}"
                 self.email = f"{self.username}@gmail.com"
-                await username_input.fill("")
-                await username_input.type(self.username, delay=random.uniform(40, 110))
-                await self.browser.random_delay(0.5, 1.0)
-                await self._click_next(page)
+                username_input.clear()
+                username_input.send_keys(self.username)
+                self.browser.random_delay(0.5, 1.0)
+                self._click_next()
 
-    async def _create_password(self, page):
-        """Create and confirm password."""
+    def _create_password(self):
         self.password = self._generate_password()
 
-        await page.wait_for_selector('input[name="Passwd"], input[type="password"]', timeout=10000)
+        self.browser.wait_for('input[name="Passwd"], input[type="password"]', timeout=10)
 
-        # Enter password
-        pwd_input = page.locator('input[name="Passwd"]')
-        await pwd_input.click()
-        await asyncio.sleep(random.uniform(0.2, 0.5))
-        await pwd_input.type(self.password, delay=random.uniform(40, 110))
+        pwd = self.browser.find('input[name="Passwd"]')
+        pwd.click()
+        time.sleep(random.uniform(0.2, 0.5))
+        pwd.send_keys(self.password)
+        self.browser.random_delay(0.3, 0.8)
 
-        await self.browser.random_delay(0.3, 0.8)
+        confirm = self.browser.safe_find('input[name="PasswdAgain"]')
+        if confirm and confirm.is_displayed():
+            confirm.click()
+            time.sleep(random.uniform(0.2, 0.5))
+            confirm.send_keys(self.password)
 
-        # Confirm password
-        confirm_input = page.locator('input[name="PasswdAgain"]')
-        if await confirm_input.is_visible(timeout=3000):
-            await confirm_input.click()
-            await asyncio.sleep(random.uniform(0.2, 0.5))
-            await confirm_input.type(self.password, delay=random.uniform(40, 110))
+        self.browser.random_delay(0.5, 1.0)
+        self._click_next()
 
-        await self.browser.random_delay(0.5, 1.0)
-        await self._click_next(page)
-
-    async def _handle_verification(self, page) -> bool:
-        """Handle phone verification if required."""
-        await asyncio.sleep(3)
-
+    def _handle_verification(self) -> bool:
+        time.sleep(3)
         for attempt in range(MAX_VERIFICATION_RETRIES):
-            current_url = page.url
-
-            # Check if we're on verification page
-            if "verify" in current_url.lower() or "challenge" in current_url.lower():
-                return await self._process_verification(page)
-
-            # Check page content
-            try:
-                page_text = await page.text_content("body")
-                if page_text:
-                    page_text_lower = page_text.lower()
-                    if "verify" in page_text_lower or "phone" in page_text_lower:
-                        return await self._process_verification(page)
-                    if "congratulations" in page_text_lower or "welcome" in page_text_lower:
-                        return True  # No verification needed
-            except Exception:
-                pass
-
-            # Check if we've moved past verification
-            if "myaccount" in current_url or "mail" in current_url:
+            url = self.browser.page_url
+            if "verify" in url.lower() or "challenge" in url.lower():
+                return self._process_verification()
+            body = self.browser.get_page_text().lower()
+            if "verify" in body or "phone" in body:
+                return self._process_verification()
+            if "welcome" in body or "congratulations" in body:
                 return True
-
-            # Might be a different page type
-            if await self._handle_other_pages(page):
+            if "myaccount" in url or "mail" in url:
+                return True
+            if self._handle_other_pages():
                 continue
-
-            await asyncio.sleep(2)
-
-        # If no verification page appeared, might be fine
+            time.sleep(2)
         return True
 
-    async def _process_verification(self, page) -> bool:
-        """Process the actual verification step."""
+    def _process_verification(self) -> bool:
         try:
-            # Try "Try another way" first
-            try:
-                another_way = page.locator('text=Try another way')
-                if await another_way.is_visible(timeout=3000):
-                    await another_way.click()
-                    await asyncio.sleep(2)
-            except Exception:
-                pass
+            skip = self.browser.safe_find_text("Try another way")
+            if skip and skip.is_displayed():
+                skip.click()
+                time.sleep(2)
 
-            # Look for SMS option
-            try:
-                sms_option = page.locator('text=Get a verification code at')
-                if await sms_option.is_visible(timeout=3000):
-                    await sms_option.click()
-                    await asyncio.sleep(1)
-            except Exception:
-                pass
+            sms_opt = self.browser.safe_find_text("Get a verification code at")
+            if sms_opt and sms_opt.is_displayed():
+                sms_opt.click()
+                time.sleep(1)
 
-            # Get phone number input
-            phone_input = page.locator('input[type="tel"]')
-            if await phone_input.is_visible(timeout=5000):
-                # Get number from SMS provider
-                sms_data = await self.sms_verifier.get_number()
-                phone_number = sms_data["number"]
+            phone_input = self.browser.safe_find('input[type="tel"]')
+            if phone_input and phone_input.is_displayed():
+                sms_data = self.sms_verifier.get_number()
+                phone = sms_data["number"]
                 sms_id = sms_data["id"]
+                print(f"📱 Using phone: {phone}")
 
-                print(f"📱 Using phone: {phone_number}")
+                phone_input.click()
+                phone_input.send_keys(phone)
+                self.browser.random_delay(0.5, 1.0)
+                self._click_next()
+                time.sleep(3)
 
-                # Enter phone number
-                await phone_input.click()
-                await phone_input.type(phone_number, delay=random.uniform(50, 100))
-                await self.browser.random_delay(0.5, 1.0)
-
-                # Click send/next
-                await self._click_next(page)
-                await asyncio.sleep(3)
-
-                # Wait for and enter code
                 try:
-                    code = await self.sms_verifier.get_code(sms_id, timeout=120)
+                    code = self.sms_verifier.get_code(sms_id, timeout=120)
                     print(f"📨 Received code: {code}")
-
-                    code_input = page.locator('input[type="tel"], input[type="number"]')
-                    if await code_input.is_visible(timeout=10000):
-                        await code_input.click()
-                        await code_input.type(code, delay=random.uniform(50, 100))
-                        await self.browser.random_delay(0.5, 1.0)
-                        await self._click_next(page)
-                        await asyncio.sleep(3)
+                    code_input = self.browser.safe_find('input[type="tel"]') or self.browser.safe_find('input[type="number"]')
+                    if code_input and code_input.is_displayed():
+                        code_input.click()
+                        code_input.send_keys(code)
+                        self.browser.random_delay(0.5, 1.0)
+                        self._click_next()
+                        time.sleep(3)
                         return True
                 except TimeoutError:
-                    print("⏰ SMS timeout, retrying...")
-                    await self.sms_verifier.cancel_number(sms_id)
+                    print("⏰ SMS timeout")
+                    self.sms_verifier.cancel_number(sms_id)
 
-            # Try skip/no verification
-            try:
-                skip_btn = page.locator('button:has-text("Skip"), a:has-text("Skip")')
-                if await skip_btn.is_visible(timeout=3000):
-                    await skip_btn.click()
-                    await asyncio.sleep(2)
-                    return True
-            except Exception:
-                pass
+            skip_btn = self.browser.safe_find_text("Skip")
+            if skip_btn and skip_btn.is_displayed():
+                skip_btn.click()
+                time.sleep(2)
+                return True
 
             return False
-
         except Exception as e:
             print(f"⚠️ Verification error: {e}")
             return False
 
-    async def _handle_other_pages(self, page) -> bool:
-        """Handle unexpected page types during signup."""
-        try:
-            body_text = await page.text_content("body") or ""
-            body_lower = body_text.lower()
-
-            # CAPTCHA page
-            if "captcha" in body_lower or "robot" in body_lower:
-                print("🤖 CAPTCHA detected! Waiting 5 seconds...")
-                await asyncio.sleep(5)
-                return True
-
-            # Rate limited
-            if "too many" in body_lower or "try again" in body_lower:
-                print("⏳ Rate limited. Waiting 30 seconds...")
-                await asyncio.sleep(30)
-                return True
-
-            # Blocked
-            if "couldn't create" in body_lower or "not available" in body_lower:
-                print("🚫 Account creation blocked")
-                return False
-
-        except Exception:
-            pass
+    def _handle_other_pages(self) -> bool:
+        body = self.browser.get_page_text().lower()
+        if "captcha" in body or "robot" in body:
+            print("🤖 CAPTCHA detected, waiting...")
+            time.sleep(5)
+            return True
+        if "too many" in body or "try again" in body:
+            print("⏳ Rate limited, waiting 30s...")
+            time.sleep(30)
+            return True
         return False
 
-    async def _skip_optional(self, page):
-        """Skip optional setup steps."""
-        skip_selectors = [
-            'button:has-text("Skip")',
-            'button:has-text("Not now")',
-            'button:has-text("No thanks")',
-            'a:has-text("Skip")',
-            'a:has-text("Not now")',
-        ]
+    def _skip_optional(self):
+        for _ in range(3):
+            for text in ["Skip", "Not now", "No thanks"]:
+                btn = self.browser.safe_find_text(text)
+                if btn and btn.is_displayed():
+                    btn.click()
+                    self.browser.random_delay(1, 2)
+                    break
 
-        for _ in range(3):  # Skip up to 3 optional pages
-            for sel in skip_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible(timeout=2000):
-                        await btn.click()
-                        await self.browser.random_delay(1, 2)
-                        break
-                except Exception:
-                    continue
-
-    async def _accept_terms(self, page):
-        """Accept Google Terms of Service."""
+    def _accept_terms(self):
         try:
-            # Scroll to bottom of terms
-            await self.browser.scroll_page(page, "down", 1000)
-            await asyncio.sleep(1)
-
-            # Click agree/accept
-            agree_selectors = [
-                'button:has-text("I agree")',
-                'button:has-text("Agree")',
-                'button:has-text("Accept")',
-                'button:has-text("I agree to the")',
-            ]
-
-            for sel in agree_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible(timeout=3000):
-                        await btn.click()
-                        await self.browser.random_delay(2, 4)
-                        return
-                except Exception:
-                    continue
-
-            # Sometimes need to scroll more and click
-            await self.browser.scroll_page(page, "down", 1000)
-            await asyncio.sleep(1)
-            await self._click_next(page)
-
+            self.browser.scroll_page("down", 1000)
+            time.sleep(1)
+            for text in ["I agree", "Agree", "Accept"]:
+                btn = self.browser.safe_find_text(text)
+                if btn and btn.is_displayed():
+                    btn.click()
+                    self.browser.random_delay(2, 4)
+                    return
+            self.browser.scroll_page("down", 1000)
+            time.sleep(1)
+            self._click_next()
         except Exception as e:
-            print(f"⚠️ Terms acceptance: {e}")
+            print(f"⚠️ Terms: {e}")
 
-    async def _verify_success(self, page) -> bool:
-        """Verify that account was successfully created."""
-        await asyncio.sleep(5)
-        current_url = page.url
-
-        success_indicators = [
-            "myaccount.google.com",
-            "mail.google.com",
-            "accounts.google.com/b",
-            "welcome",
-        ]
-
-        for indicator in success_indicators:
-            if indicator in current_url.lower():
+    def _verify_success(self) -> bool:
+        time.sleep(5)
+        url = self.browser.page_url.lower()
+        for indicator in ["myaccount.google.com", "mail.google.com", "accounts.google.com/b"]:
+            if indicator in url:
                 return True
-
-        try:
-            body = await page.text_content("body") or ""
-            body_lower = body.lower()
-            if "welcome" in body_lower or "congratulations" in body_lower:
-                return True
-        except Exception:
-            pass
-
-        return False
+        body = self.browser.get_page_text().lower()
+        return "welcome" in body or "congratulations" in body
 
     # ========================
     # Helpers
     # ========================
 
-    async def _click_next(self, page):
-        """Click the Next button."""
-        next_selectors = [
-            'button:has-text("Next")',
-            '#next button',
-            'div[role="button"]:has-text("Next")',
-            'button[jsname="LgbsSe"]',
-        ]
-
-        for sel in next_selectors:
-            try:
-                btn = page.locator(sel).first
-                if await btn.is_visible(timeout=3000):
-                    await btn.click()
-                    await self.browser.random_delay(1, 2)
-                    return
-            except Exception:
-                continue
-
-        # Fallback: press Enter
-        await page.keyboard.press("Enter")
-        await self.browser.random_delay(1, 2)
+    def _click_next(self):
+        for text in ["Next"]:
+            btn = self.browser.safe_find_text(text)
+            if btn and btn.is_displayed():
+                btn.click()
+                self.browser.random_delay(1, 2)
+                return
+        self.browser.driver.find_element(By.TAG_NAME, "body").send_keys("\n")
+        self.browser.random_delay(1, 2)
 
     def _generate_username(self) -> str:
-        """Generate a realistic-looking username."""
         patterns = [
-            lambda: f"{self.first_name.lower()}{self.last_name.lower()}{random.randint(10, 99)}",
-            lambda: f"{self.first_name.lower()}.{self.last_name.lower()}{random.randint(10, 99)}",
-            lambda: f"{self.first_name[0].lower()}{self.last_name.lower()}{random.randint(100, 999)}",
-            lambda: f"{self.first_name.lower()}{random.randint(1000, 9999)}",
-            lambda: f"{self.first_name.lower()}{self.last_name.lower()}{random.choice(['dev', 'me', 'official', 'x', 'info'])}",
+            f"{self.first_name.lower()}{self.last_name.lower()}{random.randint(10, 99)}",
+            f"{self.first_name.lower()}.{self.last_name.lower()}{random.randint(10, 99)}",
+            f"{self.first_name[0].lower()}{self.last_name.lower()}{random.randint(100, 999)}",
+            f"{self.first_name.lower()}{random.randint(1000, 9999)}",
         ]
-        return random.choice(patterns)()
+        return random.choice(patterns)
 
     def _generate_password(self) -> str:
-        """Generate a strong password."""
         special = "!@#$%^&*"
-        pwd = (
+        return (
             self.first_name.capitalize()
             + random.choice(special)
             + str(random.randint(100, 999))
             + random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
             + random.choice(special)
         )
-        return pwd
 
 
-async def create_one(proxy: str = None, sms_provider: str = None) -> dict:
+def create_one(proxy: str = None, sms_provider: str = None) -> dict:
     """Create a single Gmail account."""
     creator = GmailCreator(proxy=proxy, sms_provider=sms_provider)
-    return await creator.create()
+    return creator.create()
 
 
-async def create_batch(count: int, proxy: str = None, sms_provider: str = None) -> list:
+def create_batch(count: int, proxy: str = None, sms_provider: str = None) -> list:
     """Create multiple Gmail accounts sequentially."""
     results = []
     for i in range(count):
         print(f"\n{'='*50}")
         print(f"📧 Creating account {i+1}/{count}")
         print(f"{'='*50}")
-
-        result = await create_one(proxy=proxy, sms_provider=sms_provider)
+        result = create_one(proxy=proxy, sms_provider=sms_provider)
         results.append(result)
-
-        # Delay between accounts
         if i < count - 1:
             delay = random.uniform(5, 15)
             print(f"\n⏳ Waiting {delay:.1f}s before next account...")
-            await asyncio.sleep(delay)
-
+            time.sleep(delay)
     return results

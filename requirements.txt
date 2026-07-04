@@ -1,5 +1,5 @@
-# playwright: installed via setup_termux.sh (ARM needs special handling)
-playwright
+selenium
+webdriver-manager
 faker
 rich
 requests

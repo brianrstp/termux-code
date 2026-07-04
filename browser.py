@@ -1,278 +1,171 @@
 """
 Gmail Creator - Browser Module
-Playwright-based browser with stealth features for Termux/Android.
-Replaces Chromax browser from Windows version.
+Selenium-based browser with stealth features for Termux/Android.
 """
-import asyncio
 import random
-import os
-
-try:
-    from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-    print("⚠️  Playwright not installed. Install with:")
-    print("    pip install --no-binary :all: playwright")
-    print("    (or run setup_termux.sh)")
+import time
+import shutil
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 from config import (
-    STEALTH_ARGS, HEADLESS, VIEWPORT, USER_AGENT,
-    PROXY, TYPING_MIN_DELAY, TYPING_MAX_DELAY, TYPING_ERROR_RATE,
+    HEADLESS, VIEWPORT, USER_AGENT,
+    TYPING_MIN_DELAY, TYPING_MAX_DELAY, TYPING_ERROR_RATE,
 )
 
 
 class StealthBrowser:
-    """Manages a stealth Chromium browser instance via Playwright."""
+    """Manages a stealth Chromium browser instance via Selenium."""
 
     def __init__(self, profile: dict = None, proxy: str = None):
         self.profile = profile or {}
-        self.proxy = proxy or PROXY
-        self._playwright = None
-        self._browser: Browser = None
-        self._context: BrowserContext = None
-        self._page: Page = None
+        self.proxy = proxy
+        self._driver = None
 
-    async def __aenter__(self):
-        await self.start()
+    def __enter__(self):
+        self.start()
         return self
 
-    async def __aexit__(self, *args):
-        await self.close()
+    def __exit__(self, *args):
+        self.close()
 
-    async def start(self):
+    def start(self):
         """Launch browser with stealth settings."""
-        if not PLAYWRIGHT_AVAILABLE:
-            raise RuntimeError(
-                "Playwright is not installed!\n"
-                "Install it with:\n"
-                "  pip install --no-binary :all: playwright\n"
-                "  python -m playwright install chromium\n"
-                "Or run: ./setup_termux.sh"
-            )
-        self._playwright = await async_playwright().start()
+        options = Options()
 
-        launch_args = {
-            "headless": HEADLESS,
-            "args": STEALTH_ARGS,
-        }
+        # Find chromium binary
+        chromium_path = (
+            shutil.which("chromium")
+            or shutil.which("chromium-browser")
+            or "/data/data/com.termux/files/usr/bin/chromium"
+        )
+        options.binary_location = chromium_path
 
-        # Proxy support
-        if self.proxy:
-            launch_args["proxy"] = {"server": self.proxy}
+        if HEADLESS:
+            options.add_argument("--headless=new")
 
-        # Try launching - fallback to system chromium on ARM/Termux
-        try:
-            self._browser = await self._playwright.chromium.launch(**launch_args)
-        except Exception as e:
-            print(f"⚠️  Chromium launch failed: {e}")
-            print("🔄 Trying system chromium...")
-            import shutil
-            system_chromium = (
-                shutil.which("chromium-browser")
-                or shutil.which("chromium")
-                or os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
-            )
-            if system_chromium:
-                launch_args["executable_path"] = system_chromium
-                self._browser = await self._playwright.chromium.launch(**launch_args)
-            else:
-                raise RuntimeError(
-                    "No chromium found! Install with:\n"
-                    "  pkg install chromium\n"
-                    "or run: python -m playwright install chromium"
-                )
+        # Stealth args
+        for arg in [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-gpu",
+            "--disable-web-security",
+            "--disable-extensions",
+            "--disable-infobars",
+            "--no-first-run",
+            "--lang=en-US",
+        ]:
+            options.add_argument(arg)
 
-        # Determine viewport & user agent from profile
+        # Viewport & user agent
         vp = self.profile.get("viewport", VIEWPORT)
+        options.add_argument(f"--window-size={vp['width']},{vp['height']}")
         ua = self.profile.get("user_agent", USER_AGENT)
-        locale = self.profile.get("locale", "en-US")
-        tz = self.profile.get("timezone", "America/New_York")
+        options.add_argument(f"--user-agent={ua}")
 
-        context_args = {
-            "viewport": vp,
-            "user_agent": ua,
-            "locale": locale,
-            "timezone_id": tz,
-            "permissions": ["geolocation"],
-            "geolocation": {"latitude": 40.7128, "longitude": -74.0060},
-            "java_script_enabled": True,
-            "bypass_csp": True,
-            "ignore_https_errors": True,
-        }
+        if self.proxy:
+            options.add_argument(f"--proxy-server={self.proxy}")
 
-        self._context = await self._browser.new_context(**context_args)
+        # Anti-detection
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
 
-        # Apply stealth scripts to every new page
-        await self._apply_stealth_scripts()
+        self._driver = webdriver.Chrome(options=options)
 
-        self._page = await self._context.new_page()
+        # Anti-detection JS
+        self._driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){}, app: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+            """
+        })
 
-        # Block detection-heavy resources
-        await self._setup_request_interception()
-
-        return self._page
-
-    async def _apply_stealth_scripts(self):
-        """Inject JavaScript to hide automation indicators."""
-        stealth_js = """
-        // Overwrite navigator.webdriver
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined,
-        });
-
-        // Overwrite chrome detection
-        window.chrome = {
-            runtime: {},
-            loadTimes: function() {},
-            csi: function() {},
-            app: {},
-        };
-
-        // Overwrite permissions
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) =>
-            parameters.name === 'notifications'
-                ? Promise.resolve({ state: Notification.permission })
-                : originalQuery(parameters);
-
-        // Overwrite plugins
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-
-        // Overwrite languages
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en'],
-        });
-
-        // Prevent WebGL fingerprint detection
-        const getParameter = WebGLRenderingContext.prototype.getParameter;
-        WebGLRenderingContext.prototype.getParameter = function(parameter) {
-            if (parameter === 37445) return 'Intel Inc.';
-            if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-            return getParameter.call(this, parameter);
-        };
-
-        // Override toString to prevent function detection
-        const origToString = Function.prototype.toString;
-        Function.prototype.toString = function() {
-            if (this === navigator.permissions.query) {
-                return 'function query() { [native code] }';
-            }
-            return origToString.call(this);
-        };
-        """
-        await self._context.add_init_script(stealth_js)
-
-    async def _setup_request_interception(self):
-        """Block requests that could be used for bot detection."""
-        async def route_handler(route):
-            request = route.request
-            resource_type = request.resource_type
-
-            # Block tracking/analytics that detect automation
-            block_patterns = [
-                "google-analytics.com",
-                "googletagmanager.com",
-                "doubleclick.net",
-                "googlesyndication.com",
-            ]
-            url = request.url
-
-            if any(p in url for p in block_patterns):
-                await route.abort()
-            elif resource_type in ("image", "media", "font") and "google" not in url:
-                # Allow Google resources but block others to speed up
-                await route.continue_()
-            else:
-                await route.continue_()
-
-        await self._context.route("**/*", route_handler)
+        self._driver.set_page_load_timeout(30)
+        self._driver.implicitly_wait(10)
+        return self._driver
 
     @property
-    def page(self) -> Page:
-        return self._page
+    def driver(self):
+        return self._driver
 
-    @property
-    def context(self) -> BrowserContext:
-        return self._context
-
-    async def close(self):
-        """Clean up all browser resources."""
+    def close(self):
         try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                await self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._playwright:
-                await self._playwright.stop()
+            if self._driver:
+                self._driver.quit()
         except Exception:
             pass
 
     # ========================
     # Human-like interactions
     # ========================
-    async def human_type(self, page: Page, selector: str, text: str):
+    def human_type(self, element, text: str):
         """Type text with human-like delays and occasional typos."""
-        await page.click(selector)
-        await asyncio.sleep(random.uniform(0.1, 0.3))
-
-        for i, char in enumerate(text):
-            # Occasional typo
+        element.click()
+        time.sleep(random.uniform(0.1, 0.3))
+        for char in text:
             if random.random() < TYPING_ERROR_RATE:
-                wrong_char = chr(ord(char) + random.randint(-2, 2))
-                await page.keyboard.type(wrong_char, delay=random.uniform(10, 30))
-                await asyncio.sleep(random.uniform(0.05, 0.15))
-                await page.keyboard.press("Backspace")
-                await asyncio.sleep(random.uniform(0.05, 0.1))
-
-            await page.keyboard.type(char, delay=random.uniform(TYPING_MIN_DELAY, TYPING_MAX_DELAY))
-
-            # Occasional pause (thinking)
+                wrong = chr(ord(char) + random.randint(-2, 2))
+                element.send_keys(wrong)
+                time.sleep(random.uniform(0.05, 0.15))
+                element.send_keys("\b")
+                time.sleep(random.uniform(0.05, 0.1))
+            element.send_keys(char)
+            time.sleep(random.uniform(TYPING_MIN_DELAY / 1000, TYPING_MAX_DELAY / 1000))
             if random.random() < 0.05:
-                await asyncio.sleep(random.uniform(0.3, 0.8))
+                time.sleep(random.uniform(0.3, 0.8))
 
-    async def human_click(self, page: Page, selector: str):
-        """Click an element with human-like mouse movement."""
-        element = await page.wait_for_selector(selector, timeout=10000)
-        if element:
-            box = await element.bounding_box()
-            if box:
-                # Random offset within element
-                x = box["x"] + random.uniform(box["width"] * 0.2, box["width"] * 0.8)
-                y = box["y"] + random.uniform(box["height"] * 0.2, box["height"] * 0.8)
+    def human_click(self, element):
+        time.sleep(random.uniform(0.05, 0.2))
+        element.click()
 
-                # Move mouse gradually
-                await page.mouse.move(x, y, steps=random.randint(5, 15))
-                await asyncio.sleep(random.uniform(0.05, 0.2))
-                await page.mouse.click(x, y)
-            else:
-                await element.click()
-        else:
-            await page.click(selector)
+    def random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
+        time.sleep(random.uniform(min_sec, max_sec))
 
-    async def random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
-        """Wait a random amount of time."""
-        delay = random.uniform(min_sec, max_sec)
-        await asyncio.sleep(delay)
-
-    async def scroll_page(self, page: Page, direction: str = "down", amount: int = None):
-        """Scroll page naturally."""
+    def scroll_page(self, direction: str = "down", amount: int = None):
         if amount is None:
             amount = random.randint(200, 500)
         if direction == "up":
             amount = -amount
-        await page.mouse.wheel(0, amount)
-        await asyncio.sleep(random.uniform(0.3, 0.8))
+        self._driver.execute_script(f"window.scrollBy(0, {amount})")
+        time.sleep(random.uniform(0.3, 0.8))
+
+    def wait_for(self, selector: str, timeout: int = 10):
+        return WebDriverWait(self._driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+        )
+
+    def wait_for_clickable(self, selector: str, timeout: int = 10):
+        return WebDriverWait(self._driver, timeout).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+        )
+
+    def find(self, selector: str):
+        return self._driver.find_element(By.CSS_SELECTOR, selector)
+
+    def find_text(self, text: str):
+        return self._driver.find_element(By.XPATH, f"//*[contains(text(), '{text}')]")
+
+    def safe_find(self, selector: str):
+        try:
+            return self._driver.find_element(By.CSS_SELECTOR, selector)
+        except Exception:
+            return None
+
+    def safe_find_text(self, text: str):
+        try:
+            return self._driver.find_element(By.XPATH, f"//*[contains(text(), '{text}')]")
+        except Exception:
+            return None
+
+    @property
+    def page_url(self) -> str:
+        return self._driver.current_url
+
+    def get_page_text(self) -> str:
+        return self._driver.page_source or ""
