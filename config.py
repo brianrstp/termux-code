@@ -84,19 +84,19 @@ PROXY = os.environ.get("PROXY", None)
 # ==============================
 # TIMING SETTINGS (Human-like behavior)
 # ==============================
-TYPING_MIN_DELAY = 40   # ms
-TYPING_MAX_DELAY = 110  # ms
-TYPING_ERROR_RATE = 0.03  # 3% chance of typo
+TYPING_MIN_DELAY = 50   # ms
+TYPING_MAX_DELAY = 150  # ms
+TYPING_ERROR_RATE = 0.04  # 4% chance of typo
 
-# Delay between steps (seconds)
-STEP_DELAY_MIN = 1.5
-STEP_DELAY_MAX = 4.0
+# Delay between steps (seconds) — longer = less likely to trigger verification
+STEP_DELAY_MIN = 2.0
+STEP_DELAY_MAX = 5.0
 
 # Page load wait timeout (ms)
 PAGE_LOAD_TIMEOUT = 30000
 
 # Max retries for verification
-MAX_VERIFICATION_RETRIES = 3
+MAX_VERIFICATION_RETRIES = 5
 
 # ==============================
 # ACCOUNT FINGERPRINT PROFILES
