@@ -18,6 +18,13 @@ from config import (
 fake = Faker()
 
 SIGNUP_URL = "https://accounts.google.com/signup"
+GOOGLE_URLS = [
+    "https://www.google.com",
+    "https://www.google.com/search?q=weather+today",
+    "https://www.youtube.com",
+    "https://news.google.com",
+    "https://accounts.google.com",
+]
 
 
 class GmailCreator:
@@ -110,18 +117,95 @@ class GmailCreator:
     # ========================
 
     def _warmup(self):
-        for url in ["https://www.google.com", "https://about.google"]:
+        """Build trust signals before signup: accept cookies, visit Google properties."""
+        driver = self.browser.driver
+
+        # Step 1: Visit Google and accept cookie consent
+        print("   🍪 Accepting cookies...")
+        try:
+            driver.get("https://www.google.com")
+            self.browser.random_delay(2, 4)
+            self._accept_cookies()
+            self.browser.random_delay(1, 2)
+        except Exception:
+            pass
+
+        # Step 2: Do a Google search (builds trust)
+        print("   🔍 Performing search warmup...")
+        try:
+            driver.get("https://www.google.com/search?q=weather+today")
+            self.browser.random_delay(2, 4)
+            self._accept_cookies()
+            self.browser.scroll_page("down")
+            self.browser.random_delay(1, 3)
+        except Exception:
+            pass
+
+        # Step 3: Visit YouTube (another Google property)
+        print("   🎬 YouTube warmup...")
+        try:
+            driver.get("https://www.youtube.com")
+            self.browser.random_delay(2, 4)
+            self._accept_cookies()
+            self.browser.scroll_page("down")
+            self.browser.random_delay(1, 3)
+        except Exception:
+            pass
+
+        # Step 4: Visit Google News
+        print("   📰 News warmup...")
+        try:
+            driver.get("https://news.google.com")
+            self.browser.random_delay(2, 4)
+            self._accept_cookies()
+            self.browser.random_delay(1, 2)
+        except Exception:
+            pass
+
+        print("   ✅ Warmup complete")
+
+    def _accept_cookies(self):
+        """Click cookie consent buttons on Google pages."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+        # Common cookie consent button selectors
+        for sel in [
+            'button[id*="accept" i]',
+            'button[id*="agree" i]',
+            'button[id*="consent" i]',
+            'button[aria-label*="accept" i]',
+            'button[aria-label*="agree" i]',
+            'form[action*="consent"] button',
+            '#L2AGLb',  # Google's cookie consent ID
+            '[data-idom-class] button:first-child',
+        ]:
             try:
-                self.browser.driver.get(url)
-                self.browser.random_delay(2, 5)
-                self.browser.scroll_page("down")
-                self.browser.random_delay(1, 2)
+                btn = driver.find_element(By.CSS_SELECTOR, sel)
+                if btn.is_displayed():
+                    btn.click()
+                    print(f"      🍪 Clicked cookie consent: {sel}")
+                    self.browser.random_delay(0.5, 1)
+                    return
             except Exception:
-                pass
+                continue
+        # Try by text
+        for text in ["Accept all", "I agree", "Accept", "Agree", "OK"]:
+            try:
+                btn = driver.find_element(By.XPATH,
+                    f"//button[contains(text(),'{text}')]")
+                if btn.is_displayed():
+                    btn.click()
+                    print(f"      🍪 Clicked cookie consent: {text}")
+                    self.browser.random_delay(0.5, 1)
+                    return
+            except Exception:
+                continue
 
     def _go_to_signup(self):
         self.browser.driver.get(SIGNUP_URL)
-        self.browser.random_delay(2, 4)
+        self.browser.random_delay(3, 6)
+        self._accept_cookies()  # May show cookie consent on signup page too
+        self.browser.random_delay(1, 2)
         self.browser.wait_for('input[name="firstName"]', timeout=15)
 
     def _fill_name(self):
@@ -688,72 +772,203 @@ class GmailCreator:
         self._click_next()
 
     def _handle_verification(self) -> bool:
+        """Handle verification page — try to skip phone verification."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+
         time.sleep(3)
+        url = self.browser.page_url
+        print(f"   📍 Verification URL: {url[:80]}...")
+
+        # Check if we're actually on a welcome/account page (no verification needed)
+        body = self.browser.get_page_text().lower()
+        if any(kw in url.lower() for kw in ["myaccount", "mail.google", "welcome"]):
+            print("   ✅ No verification needed — already on account page")
+            return True
+        if any(kw in body for kw in ["welcome", "congratulations", "you're all set"]):
+            print("   ✅ No verification needed — welcome page detected")
+            return True
+
+        # ── Strategy 1: Try to SKIP verification entirely ──
+        print("   🔄 Attempting to skip phone verification...")
         for attempt in range(MAX_VERIFICATION_RETRIES):
-            url = self.browser.page_url
-            if "verify" in url.lower() or "challenge" in url.lower():
-                return self._process_verification()
-            body = self.browser.get_page_text().lower()
-            if "verify" in body or "phone" in body:
-                return self._process_verification()
-            if "welcome" in body or "congratulations" in body:
-                return True
-            if "myaccount" in url or "mail" in url:
-                return True
-            if self._handle_other_pages():
-                continue
+            print(f"   📱 Attempt {attempt + 1}/{MAX_VERIFICATION_RETRIES}")
+
+            # Try "Skip" button first
+            for skip_text in ["Skip", "Skip this step", "Not now", "Use without",
+                              "No thanks", "I'll do this later", "Confirm",
+                              "Skip phone number"]:
+                try:
+                    btn = driver.find_element(By.XPATH,
+                        f"//button[contains(text(),'{skip_text}')] | "
+                        f"//div[@role='button'][contains(text(),'{skip_text}')] | "
+                        f"//span[contains(text(),'{skip_text}')]"
+                        f"/ancestor::*[@role='button' or self::button]"
+                    )
+                    if btn.is_displayed():
+                        print(f"   ✅ Found skip option: '{skip_text}'")
+                        btn.click()
+                        self.browser.random_delay(2, 4)
+                        # Check if we moved past verification
+                        new_url = self.browser.page_url
+                        new_body = self.browser.get_page_text().lower()
+                        if any(kw in new_url.lower() for kw in ["myaccount", "welcome", "mail"]):
+                            print("   ✅ Verification skipped successfully!")
+                            return True
+                        if any(kw in new_body for kw in ["welcome", "congratulations"]):
+                            print("   ✅ Verification skipped successfully!")
+                            return True
+                except Exception:
+                    continue
+
+            # Try "Try another way" to get alternative options
+            for alt_text in ["Try another way", "Other options", "More options"]:
+                try:
+                    btn = driver.find_element(By.XPATH,
+                        f"//button[contains(text(),'{alt_text}')] | "
+                        f"//div[@role='button'][contains(text(),'{alt_text}')] | "
+                        f"//a[contains(text(),'{alt_text}')]"
+                    )
+                    if btn.is_displayed():
+                        print(f"   🔄 Clicking: '{alt_text}'")
+                        btn.click()
+                        self.browser.random_delay(2, 3)
+                        break
+                except Exception:
+                    continue
+
+            # After clicking "Try another way", check for skip options
             time.sleep(2)
-        return True
+
+            # Try "Add recovery email" instead of phone
+            for recovery_text in ["Add recovery email", "recovery email"]:
+                try:
+                    btn = driver.find_element(By.XPATH,
+                        f"//*[contains(text(),'{recovery_text}')]"
+                        f"/ancestor::*[@role='button' or self::button or self::a]"
+                    )
+                    if btn.is_displayed():
+                        print(f"   📧 Found: '{recovery_text}' — using this instead")
+                        btn.click()
+                        self.browser.random_delay(1, 2)
+                        # Fill recovery email (we can use a fake one)
+                        try:
+                            rec_input = driver.find_element(By.CSS_SELECTOR,
+                                'input[type="email"]')
+                            if rec_input.is_displayed():
+                                fake_email = f"{self.username}@gmail.com"
+                                rec_input.send_keys(fake_email)
+                                self.browser.random_delay(0.5, 1)
+                                self._click_next()
+                                time.sleep(3)
+                                return True
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+
+            # Check if we moved to next step anyway
+            url = self.browser.page_url
+            body = self.browser.get_page_text().lower()
+            if any(kw in url.lower() for kw in ["myaccount", "welcome", "mail"]):
+                return True
+            if any(kw in body for kw in ["welcome", "congratulations"]):
+                return True
+
+            print(f"   ⚠️  Attempt {attempt + 1} — no skip option found, retrying...")
+            time.sleep(2)
+
+        # ── Strategy 2: If all skip attempts failed, use SMS service ──
+        print("   📱 Skip failed — attempting SMS verification...")
+        return self._process_verification()
 
     def _process_verification(self) -> bool:
+        """Process phone verification using SMS service."""
+        from selenium.webdriver.common.by import By
+        driver = self.browser.driver
+
         try:
-            skip = self.browser.safe_find_text("Try another way")
-            if skip and skip.is_displayed():
-                skip.click()
-                time.sleep(2)
+            # First try: get SMS number from provider
+            sms_data = self.sms_verifier.get_number()
+            if not sms_data:
+                print("   ❌ No SMS number available")
+                return False
 
-            sms_opt = self.browser.safe_find_text("Get a verification code at")
-            if sms_opt and sms_opt.is_displayed():
-                sms_opt.click()
-                time.sleep(1)
+            phone = sms_data["number"]
+            sms_id = sms_data["id"]
+            print(f"   📱 Using phone: {phone}")
 
-            phone_input = self.browser.safe_find('input[type="tel"]')
-            if phone_input and phone_input.is_displayed():
-                sms_data = self.sms_verifier.get_number()
-                phone = sms_data["number"]
-                sms_id = sms_data["id"]
-                print(f"📱 Using phone: {phone}")
-
-                phone_input.click()
-                phone_input.send_keys(phone)
-                self.browser.random_delay(0.5, 1.0)
-                self._click_next()
-                time.sleep(3)
-
+            # Find phone input
+            phone_input = None
+            for sel in ['input[type="tel"]', 'input[name="phoneNumber"]',
+                        'input[aria-label*="phone" i]',
+                        'input[aria-label*="Phone" i]',
+                        'input[placeholder*="phone" i]']:
                 try:
-                    code = self.sms_verifier.get_code(sms_id, timeout=120)
-                    print(f"📨 Received code: {code}")
-                    code_input = self.browser.safe_find('input[type="tel"]') or self.browser.safe_find('input[type="number"]')
-                    if code_input and code_input.is_displayed():
-                        code_input.click()
-                        code_input.send_keys(code)
-                        self.browser.random_delay(0.5, 1.0)
-                        self._click_next()
-                        time.sleep(3)
-                        return True
-                except TimeoutError:
-                    print("⏰ SMS timeout")
-                    self.sms_verifier.cancel_number(sms_id)
+                    el = driver.find_element(By.CSS_SELECTOR, sel)
+                    if el.is_displayed():
+                        phone_input = el
+                        print(f"   📱 Phone input found via: {sel}")
+                        break
+                except Exception:
+                    continue
 
-            skip_btn = self.browser.safe_find_text("Skip")
-            if skip_btn and skip_btn.is_displayed():
-                skip_btn.click()
-                time.sleep(2)
-                return True
+            if not phone_input:
+                print("   ❌ Phone input not found")
+                return False
+
+            phone_input.click()
+            time.sleep(0.5)
+            phone_input.send_keys(phone)
+            self.browser.random_delay(0.5, 1.0)
+            self._click_next()
+            time.sleep(3)
+
+            # Wait for SMS code
+            try:
+                print("   ⏳ Waiting for SMS code...")
+                code = self.sms_verifier.get_code(sms_id, timeout=120)
+                print(f"   📨 Received code: {code}")
+
+                # Find code input
+                code_input = None
+                for sel in ['input[type="tel"]', 'input[type="number"]',
+                            'input[name="smsUserPin"]',
+                            'input[aria-label*="code" i]',
+                            'input[aria-label*="Code" i]',
+                            'input[placeholder*="code" i]']:
+                    try:
+                        el = driver.find_element(By.CSS_SELECTOR, sel)
+                        if el.is_displayed():
+                            code_input = el
+                            break
+                    except Exception:
+                        continue
+
+                if code_input:
+                    code_input.click()
+                    time.sleep(0.3)
+                    code_input.send_keys(code)
+                    self.browser.random_delay(0.5, 1.0)
+                    self._click_next()
+                    time.sleep(3)
+                    return True
+                else:
+                    print("   ❌ Code input not found")
+
+            except TimeoutError:
+                print("   ⏰ SMS timeout")
+                self.sms_verifier.cancel_number(sms_id)
+            except Exception as e:
+                print(f"   ❌ SMS error: {e}")
+                try:
+                    self.sms_verifier.cancel_number(sms_id)
+                except Exception:
+                    pass
 
             return False
         except Exception as e:
-            print(f"⚠️ Verification error: {e}")
+            print(f"   ⚠️ Verification error: {e}")
             return False
 
     def _handle_other_pages(self) -> bool:
