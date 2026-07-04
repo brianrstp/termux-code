@@ -6,7 +6,15 @@ Replaces Chromax browser from Windows version.
 import asyncio
 import random
 import os
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+
+try:
+    from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    print("⚠️  Playwright not installed. Install with:")
+    print("    pip install --no-binary :all: playwright")
+    print("    (or run setup_termux.sh)")
 
 from config import (
     STEALTH_ARGS, HEADLESS, VIEWPORT, USER_AGENT,
@@ -34,6 +42,14 @@ class StealthBrowser:
 
     async def start(self):
         """Launch browser with stealth settings."""
+        if not PLAYWRIGHT_AVAILABLE:
+            raise RuntimeError(
+                "Playwright is not installed!\n"
+                "Install it with:\n"
+                "  pip install --no-binary :all: playwright\n"
+                "  python -m playwright install chromium\n"
+                "Or run: ./setup_termux.sh"
+            )
         self._playwright = await async_playwright().start()
 
         launch_args = {
